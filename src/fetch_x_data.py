@@ -1,14 +1,14 @@
 """Read-only fetch helpers for twitterapi.io.
 
-Free-tier limit is ~1 QPS (one request per 5 seconds). We enforce
-a >5s gap between requests and retry once on HTTP 429.
+Free-tier limit is ~1 QPS (one request every 5 seconds). We enforce a
+>5s gap between requests and retry once on HTTP 429.
 """
 
 from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from typing import Any, Iterable
 
 import requests
 
@@ -47,7 +47,6 @@ def _get(path: str, params: dict[str, Any]) -> dict[str, Any]:
         timeout=20,
     )
     if resp.status_code == 429:
-        # back off and retry once
         time.sleep(MIN_INTERVAL_S)
         _respect_qps()
         resp = requests.get(
@@ -65,20 +64,32 @@ def get_user_info(username: str) -> dict[str, Any]:
     return _get("/twitter/user/info", {"userName": username})
 
 
-def get_user_last_tweets(username: str, count: int = 20) -> dict[str, Any]:
-    return _get("/twitter/user/last_tweets", {"userName": username, "count": count})
+def get_user_last_tweets(username: str, count: int = 20) -> list[dict[str, Any]]:
+    payload = _get("/twitter/user/last_tweets", {"userName": username, "count": count})
+    inner = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(inner, dict):
+        tweets = inner.get("tweets")
+        if isinstance(tweets, list):
+            return tweets
+    tweets = payload.get("tweets") if isinstance(payload, dict) else None
+    return tweets if isinstance(tweets, list) else []
 
 
-def fetch_kol_recent(handles: list[str], count_per_user: int = 10) -> list[dict[str, Any]]:
-    """Best-effort recent tweets per handle. Errors per user do not abort the run."""
-    items: list[dict[str, Any]] = []
-    for handle in handles:
-        if not handle:
-            continue
+def _tweet_id_int(t: dict[str, Any]) -> int:
+    try:
+        return int(t.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def filter_new_tweets(tweets: Iterable[dict[str, Any]], last_id: str | None) -> list[dict[str, Any]]:
+    """Return tweets with snowflake id strictly greater than last_id."""
+    threshold = 0
+    if last_id:
         try:
-            data = get_user_last_tweets(handle, count=count_per_user)
-        except TwitterAPIError as exc:
-            items.append({"handle": handle, "error": str(exc)})
-            continue
-        items.append({"handle": handle, "data": data})
-    return items
+            threshold = int(last_id)
+        except ValueError:
+            threshold = 0
+    out = [t for t in tweets if _tweet_id_int(t) > threshold]
+    out.sort(key=_tweet_id_int)
+    return out

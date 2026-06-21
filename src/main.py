@@ -1,7 +1,13 @@
-"""MVP entrypoint: fetch -> minimal markdown report -> save under reports/.
+"""Daily incremental brief.
 
-This stage does NOT call an LLM. It only verifies the pipeline:
-twitterapi.io -> local markdown -> Discord push (handled by workflow).
+Logic:
+- For each configured handle, look up its last seen tweet id in
+  data/last_seen.json.
+- New handle (no record): fetch ~7 days worth of tweets.
+- Tracked handle: fetch the most recent batch and keep only tweets
+  with id > last_seen_id (incremental).
+- Render markdown report and update last_seen.json so the next run
+  only sees fresh tweets.
 """
 
 from __future__ import annotations
@@ -26,15 +32,25 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
 DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
+STATE_PATH = DATA_DIR / "last_seen.json"
 
 SH = ZoneInfo("Asia/Shanghai")
 
+NEW_ACCOUNT_LOOKBACK_DAYS = 7
+NEW_ACCOUNT_FETCH_COUNT = 100   # pulled once per new account
+TRACKED_FETCH_COUNT = 40        # enough to cover a daily window
 
-def _decide_report_type(now_sh: dt.datetime) -> str:
-    env = os.environ.get("REPORT_TYPE", "auto").strip().lower()
-    if env in {"morning", "evening"}:
-        return env
-    return "morning" if now_sh.hour < 14 else "evening"
+if __package__ in (None, ""):
+    sys.path.insert(0, str(ROOT))
+    from src.fetch_x_data import (  # type: ignore
+        TwitterAPIError,
+        filter_new_tweets,
+        get_user_last_tweets,
+    )
+    from src.state import load_state, save_state, update_handle  # type: ignore
+else:
+    from .fetch_x_data import TwitterAPIError, filter_new_tweets, get_user_last_tweets
+    from .state import load_state, save_state, update_handle
 
 
 def _load_handles() -> list[str]:
@@ -42,7 +58,7 @@ def _load_handles() -> list[str]:
     if not path.exists():
         return []
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    handles = []
+    handles: list[str] = []
     for item in data.get("kol_accounts", []) or []:
         handle = (item.get("handle") or "").strip()
         if handle:
@@ -50,23 +66,23 @@ def _load_handles() -> list[str]:
     return handles
 
 
-def _extract_tweets(payload: dict) -> list[dict]:
-    """twitterapi.io last_tweets returns: {status, data: {tweets: [...]}, ...}."""
-    if not isinstance(payload, dict):
-        return []
-    inner = payload.get("data")
-    if isinstance(inner, dict):
-        tweets = inner.get("tweets")
-        if isinstance(tweets, list):
-            return tweets
-    tweets = payload.get("tweets")
-    return tweets if isinstance(tweets, list) else []
+def _parse_created_at(s: str) -> dt.datetime | None:
+    # twitterapi.io style: "Sun Jun 21 06:13:10 +0000 2026"
+    if not s:
+        return None
+    try:
+        return dt.datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y")
+    except ValueError:
+        try:
+            return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
 
 def _fmt_tweet(t: dict) -> str:
     text = (t.get("text") or "").replace("\n", " ").strip()
-    if len(text) > 220:
-        text = text[:220] + "…"
+    if len(text) > 260:
+        text = text[:260] + "…"
     created = t.get("createdAt", "")
     url = t.get("url") or t.get("twitterUrl") or ""
     likes = t.get("likeCount", 0)
@@ -74,35 +90,40 @@ def _fmt_tweet(t: dict) -> str:
     return f"  - [{created}] {text}  (♥{likes} / 🔁{rts}) {url}"
 
 
-def _render_markdown(report_type: str, now_sh: dt.datetime, fetched: list[dict]) -> str:
-    title = "早报" if report_type == "morning" else "晚报"
+def _render_markdown(now_sh: dt.datetime, results: list[dict]) -> str:
     lines = [
-        f"# AI 基建与美股成长股{title}",
+        "# AI 基建与美股成长股日报",
         "",
         f"生成时间：{now_sh.strftime('%Y-%m-%d %H:%M')} Asia/Shanghai",
-        f"模式：{report_type}",
+        "窗口：过去 24 小时（新账号回溯 7 天）",
         "",
-        "## KOL 抓取概况",
+        "## KOL 新增推文",
         "",
     ]
-    if not fetched:
+    total_new = 0
+    if not results:
         lines.append("- 当前未配置任何 KOL handle，请在 `config/kol_accounts.yaml` 中补充。")
     else:
-        for item in fetched:
+        for item in results:
             handle = item.get("handle")
             if "error" in item:
                 lines.append(f"- @{handle} : 抓取失败 ({item['error']})")
                 continue
-            tweets = _extract_tweets(item.get("data") or {})
-            lines.append(f"- @{handle} : 抓到 {len(tweets)} 条")
-            for t in tweets[:5]:
+            new_tweets = item.get("new_tweets") or []
+            mode = item.get("mode")
+            total_new += len(new_tweets)
+            tag = "新账号 / 回溯 7 天" if mode == "bootstrap" else "增量"
+            lines.append(f"- @{handle} : 新增 {len(new_tweets)} 条（{tag}）")
+            for t in new_tweets:
                 lines.append(_fmt_tweet(t))
     lines += [
         "",
+        f"合计新增：{total_new} 条。",
+        "",
         "## 备注",
         "",
-        "- 这是链路打通版本，尚未接入 LLM 总结。",
-        "- 下一阶段会加入去重、分类、情绪、预警与中文简报生成。",
+        "- 链路打通版本，尚未接入 LLM 总结。",
+        "- 下一阶段：去重已通过 last_seen 完成，将加入分类、情绪、个股关联、预警与中文总结。",
         "",
     ]
     return "\n".join(lines)
@@ -110,37 +131,66 @@ def _render_markdown(report_type: str, now_sh: dt.datetime, fetched: list[dict])
 
 def main() -> int:
     now_sh = dt.datetime.now(SH)
-    report_type = _decide_report_type(now_sh)
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    bootstrap_cutoff = now_utc - dt.timedelta(days=NEW_ACCOUNT_LOOKBACK_DAYS)
 
     DATA_DIR.mkdir(exist_ok=True)
     REPORTS_DIR.mkdir(exist_ok=True)
 
     handles = _load_handles()
+    state = load_state(STATE_PATH)
 
-    fetched: list[dict] = []
-    if handles:
+    results: list[dict] = []
+    for handle in handles:
+        record = state.get(handle) or {}
+        last_id = record.get("last_tweet_id")
+        mode = "incremental" if last_id else "bootstrap"
+        count = TRACKED_FETCH_COUNT if last_id else NEW_ACCOUNT_FETCH_COUNT
+
         try:
-            from .fetch_x_data import fetch_kol_recent
-        except ImportError:
-            sys.path.insert(0, str(ROOT))
-            from src.fetch_x_data import fetch_kol_recent  # type: ignore
-        fetched = fetch_kol_recent(handles, count_per_user=5)
+            raw = get_user_last_tweets(handle, count=count)
+        except TwitterAPIError as exc:
+            results.append({"handle": handle, "error": str(exc), "mode": mode})
+            continue
 
-    raw_path = DATA_DIR / f"raw_{now_sh.strftime('%Y%m%d_%H%M')}_{report_type}.json"
-    raw_path.write_text(json.dumps(fetched, ensure_ascii=False, indent=2), encoding="utf-8")
+        if last_id:
+            new_tweets = filter_new_tweets(raw, last_id)
+        else:
+            # bootstrap: keep tweets within last N days
+            new_tweets = []
+            for t in raw:
+                created = _parse_created_at(t.get("createdAt", ""))
+                if created and created >= bootstrap_cutoff:
+                    new_tweets.append(t)
+            new_tweets.sort(key=lambda t: int(t.get("id") or 0))
 
-    md = _render_markdown(report_type, now_sh, fetched)
-    report_path = REPORTS_DIR / f"report_{now_sh.strftime('%Y%m%d')}_{report_type}.md"
+        if new_tweets:
+            newest_id = str(max(int(t.get("id") or 0) for t in new_tweets))
+            update_handle(state, handle, newest_id, now_sh.isoformat())
+        elif not last_id and raw:
+            # no tweets in window but we did see the account; pin newest id
+            newest_id = str(max(int(t.get("id") or 0) for t in raw))
+            update_handle(state, handle, newest_id, now_sh.isoformat())
+
+        results.append({"handle": handle, "mode": mode, "new_tweets": new_tweets, "fetched": len(raw)})
+
+    save_state(STATE_PATH, state)
+
+    raw_path = DATA_DIR / f"raw_{now_sh.strftime('%Y%m%d_%H%M')}.json"
+    raw_path.write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    md = _render_markdown(now_sh, results)
+    report_path = REPORTS_DIR / f"report_{now_sh.strftime('%Y%m%d')}.md"
     report_path.write_text(md, encoding="utf-8")
 
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
         with open(gh_out, "a", encoding="utf-8") as fh:
             fh.write(f"report_path={report_path.as_posix()}\n")
-            fh.write(f"report_type={report_type}\n")
 
     print(f"[OK] report -> {report_path}")
     print(f"[OK] raw    -> {raw_path}")
+    print(f"[OK] state  -> {STATE_PATH}")
     return 0
 
 

@@ -2,17 +2,12 @@ name: X Market Brief
 
 on:
   schedule:
-    # Shanghai 08:00 and 20:00 -> UTC 00:00 and 12:00
-    - cron: '0 0,12 * * *'
+    # Beijing 07:00 -> UTC 23:00 (previous day)
+    - cron: '0 23 * * *'
   workflow_dispatch:
-    inputs:
-      report_type:
-        description: 'morning | evening | auto'
-        required: false
-        default: 'auto'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   market-brief:
@@ -21,6 +16,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # we push back last_seen.json; need a real token, not GITHUB_TOKEN restricted to no-push
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -37,7 +36,6 @@ jobs:
         id: build
         env:
           TWITTERAPI_IO_KEY: ${{ secrets.TWITTERAPI_IO_KEY }}
-          REPORT_TYPE: ${{ github.event.inputs.report_type || 'auto' }}
         run: |
           python -m src.main
 
@@ -47,7 +45,24 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python scripts/send_discord.py "${{ steps.build.outputs.report_path }}" \
-            --title "Market Brief (${{ steps.build.outputs.report_type }})"
+            --title "Market Brief 日报"
+
+      - name: Persist last_seen.json
+        if: always()
+        run: |
+          if [ -f data/last_seen.json ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/last_seen.json
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(state): update last_seen.json [skip ci]"
+              git push
+            else
+              echo "last_seen.json unchanged, skip commit."
+            fi
+          else
+            echo "no last_seen.json to persist."
+          fi
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v5
@@ -55,5 +70,5 @@ jobs:
           name: market-brief-report
           path: |
             reports/
-            data/
+            data/raw_*.json
           if-no-files-found: ignore

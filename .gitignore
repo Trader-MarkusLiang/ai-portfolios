@@ -13,9 +13,12 @@ venv/
 .ruff_cache/
 .pytest_cache/
 
-# data / runtime
+# data: ignore everything except last_seen.json (persisted across runs)
 data/*
 !data/.gitkeep
+!data/last_seen.json
+
+# reports: ignore generated files but keep folder
 reports/*
 !reports/.gitkeep
 
