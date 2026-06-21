@@ -33,6 +33,7 @@ REPORTS_DIR = ROOT / "reports"
 SUMMARY_DIR = REPORTS_DIR / "summaries"
 STATE_PATH = DATA_DIR / "last_seen.json"
 REPORT_TITLE = "全球投资动能监控"
+WECHAT_GROUP_SUMMARY_DIR = DATA_DIR / "wechat_groups" / "summaries"
 
 SH = ZoneInfo("Asia/Shanghai")
 
@@ -47,6 +48,7 @@ if __package__ in (None, ""):
     from src.sources.nitter import NitterError, fetch_user_rss  # type: ignore
     from src.sources.rss_articles import build_manual_articles, fetch_articles  # type: ignore
     from src.sources.twitterapi_io import fetch_user_tweets as fetch_via_tio  # type: ignore
+    from src.sources.wechat_groups import load_wechat_group_summaries  # type: ignore
     from src.fetch_x_data import TwitterAPIError  # type: ignore
     from src.summarize import LLMError, summarize  # type: ignore
 else:
@@ -54,6 +56,7 @@ else:
     from .sources.nitter import NitterError, fetch_user_rss
     from .sources.rss_articles import build_manual_articles, fetch_articles
     from .sources.twitterapi_io import fetch_user_tweets as fetch_via_tio
+    from .sources.wechat_groups import load_wechat_group_summaries
     from .fetch_x_data import TwitterAPIError
     from .summarize import LLMError, summarize
 
@@ -97,6 +100,17 @@ def _load_article_sources() -> list[dict]:
             continue
         sources.append(dict(item))
     return sources
+
+
+def _wechat_groups_enabled() -> bool:
+    path = CONFIG_DIR / "wechat_groups.yaml"
+    if not path.exists():
+        return False
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    for item in data.get("wechat_groups") or []:
+        if item.get("enabled") and item.get("include_in_report", True):
+            return True
+    return False
 
 
 def _allow_tio_fallback() -> bool:
@@ -252,13 +266,38 @@ def _fetch_article_sources(sources: list[dict], state: dict, cutoff_utc: dt.date
     return results
 
 
+def _fetch_wechat_group_summaries(state: dict, cutoff_utc: dt.datetime, now_iso: str, force_days: int) -> list[dict]:
+    if not _wechat_groups_enabled():
+        return []
+    summaries = load_wechat_group_summaries(WECHAT_GROUP_SUMMARY_DIR)
+    if not summaries:
+        return []
+    source_id = "wechat_group:summaries"
+    last_id = None if force_days else (state.get(source_id) or {}).get("last_tweet_id")
+    new_summaries = _filter_articles(summaries, last_id, cutoff_utc)
+    if not force_days and summaries:
+        newest = str(max(summaries, key=_item_sort_key).get("id") or "")
+        if newest:
+            update_handle(state, source_id, newest, now_iso)
+    return [
+        {
+            "name": "微信投资群摘要",
+            "handle": source_id,
+            "mode": "article_rss",
+            "new_tweets": new_summaries,
+            "source": "wechat_group:local",
+            "errors": [],
+        }
+    ]
+
+
 def _render_raw_markdown(now_sh: dt.datetime, results: list[dict], llm_error: str | None = None) -> str:
     lines = [
         f"# {REPORT_TITLE}（原文模式）" if llm_error else f"# {REPORT_TITLE}",
         "",
         f"生成时间：{now_sh.strftime('%Y-%m-%d %H:%M')} Asia/Shanghai",
         "窗口：过去 24 小时（新账号回溯 7 天）",
-        "数据源：Nitter RSS 优先，twitterapi.io 兜底；文章源支持 RSS/Atom",
+        "数据源：Nitter RSS 优先，twitterapi.io 兜底；文章源支持 RSS/Atom；本地微信投资群摘要",
         "",
     ]
     if llm_error:
@@ -390,7 +429,7 @@ def _render_summary_markdown(
         f"生成时间：{now_sh.strftime('%Y-%m-%d %H:%M')} Asia/Shanghai",
         "窗口：过去 24 小时（新账号回溯 7 天）",
         f"数据源：{source_summary}",
-        f"新增推文：{total_new} 条",
+        f"新增内容：{total_new} 条",
         f"模型：{(os.environ.get('ARK_MODEL') or 'kimi-k2.6').strip()}",
         "",
         summary_md.strip(),
@@ -481,6 +520,7 @@ def main() -> int:
         )
 
     results.extend(_fetch_article_sources(article_sources, state, bootstrap_cutoff, now_sh.isoformat(), force_days))
+    results.extend(_fetch_wechat_group_summaries(state, bootstrap_cutoff, now_sh.isoformat(), force_days))
 
     if not force_days:
         save_state(STATE_PATH, state)
@@ -512,7 +552,7 @@ def main() -> int:
                 "窗口：过去 24 小时（新账号回溯 7 天）",
                 f"数据源：{' / '.join(f'{k}:{v}' for k, v in sorted(source_counts.items())) or 'none'}",
                 "",
-                "今日所有追踪 KOL 均无新增推文，跳过 LLM 总结。",
+                "今日所有追踪 KOL / 文章源 / 微信投资群均无新增内容，跳过 LLM 总结。",
                 "",
             ]
         )

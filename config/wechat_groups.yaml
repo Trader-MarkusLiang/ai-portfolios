@@ -1,0 +1,9 @@
+# Mac 微信投资群安全收件箱配置。
+# 只处理白名单群；默认不把原始群聊提交到 GitHub。
+wechat_groups:
+  - name: 🈲言-2六便士AI吟诗
+    enabled: true
+    include_in_report: true
+    tags: ["投资群", "AI", "调研", "操作建议"]
+    sync_raw_to_git: false
+    sync_summary_to_git: true

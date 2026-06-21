@@ -70,6 +70,15 @@ Continue the existing investment brief project, correcting the product positioni
 - Updated sync behavior to prefer RSS articles over manual placeholders for the same URL and avoid duplicate records.
 - Verified `scripts/run_wechat_sync.sh --no-git` succeeds with 11 unique WeChat article records and no duplicate URLs.
 
+
+- Added safe Mac WeChat group ingestion for `🈲言-2六便士AI吟诗`: UI/clipboard capture only, no database decryption or Hook path.
+- Added `config/wechat_groups.yaml`, `scripts/capture_wechat_group_visible.py`, `scripts/import_wechat_group_clipboard.py`, `scripts/process_wechat_group_inbox.py`, and `scripts/run_wechat_group_sync.sh`.
+- Added `src/sources/wechat_groups.py` and wired `src/main.py` so committed daily group summaries under `data/wechat_groups/summaries/` become a report source named `微信投资群摘要`.
+- Updated `.gitignore` so raw inbox and local processed previews stay local, while LLM/structured daily summaries can be committed to GitHub.
+- Created Codex local automation `微信群投资情报本地同步` (`automation-2`) at Beijing 08:20, 12:20, 18:20, 22:20 to run the group sync script and push summary updates.
+- Verified Python compilation and simulated summary ingestion; removed simulated raw and summary data before committing.
+- Direct UI capture test is blocked until macOS grants Accessibility permission to Terminal/Codex/osascript.
+
 ## Decisions
 
 - Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.
@@ -88,10 +97,11 @@ Continue the existing investment brief project, correcting the product positioni
 
 ## Resume instructions
 
-- Read `src/main.py`, `src/summarize.py`, `.github/workflows/market-brief.yml`, and `README.md`.
+- Read `src/main.py`, `src/sources/wechat_groups.py`, `scripts/run_wechat_group_sync.sh`, `src/summarize.py`, `.github/workflows/market-brief.yml`, and `README.md`.
 - Ensure GitHub Secrets include `ARK_API_KEY`, `ARK_BASE_URL`, `ARK_MODEL`, and `DISCORD_WEBHOOK_URL`.
 - Manually trigger `全球投资动能监控` in GitHub Actions and inspect Discord output.
 
 ## Open questions
 
-- Local WeWe RSS URLs are configured. Use Codex local automation to sync articles multiple times per day; deploy WeWe RSS publicly only if GitHub Actions must fetch directly.
+- Local WeWe RSS URLs are configured and Codex automation syncs articles multiple times per day.
+- Mac WeChat group UI capture automation is configured, but first live run requires macOS Accessibility permission for Terminal/Codex/osascript if not already granted.
