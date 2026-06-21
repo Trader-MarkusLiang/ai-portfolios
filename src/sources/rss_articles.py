@@ -54,6 +54,35 @@ def _stable_id(url: str, title: str) -> str:
     return hashlib.sha1(f"{url}|{title}".encode("utf-8")).hexdigest()
 
 
+def build_manual_articles(source: dict) -> list[dict]:
+    name = (source.get("name") or "").strip()
+    kind = (source.get("kind") or "article").strip()
+    articles: list[dict] = []
+    for item in source.get("manual_articles") or []:
+        url = (item.get("url") or "").strip()
+        if not url:
+            continue
+        title = _strip_html(item.get("title") or name or url)
+        summary = _strip_html(item.get("summary") or "")
+        created = (item.get("published_at") or "").strip()
+        created_at, created_ts = _parse_time(created)
+        text = f"{title}。{summary}" if summary and summary != title else title
+        articles.append(
+            {
+                "id": _stable_id(url, title),
+                "text": text,
+                "url": url,
+                "createdAt": created_at,
+                "createdAtTs": created_ts,
+                "source": f"manual:{kind}",
+                "contentType": "article",
+                "sourceName": name,
+                "title": title,
+            }
+        )
+    return articles
+
+
 def _child_text(node: ET.Element, names: tuple[str, ...]) -> str:
     for name in names:
         found = node.find(name)

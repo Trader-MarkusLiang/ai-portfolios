@@ -45,14 +45,14 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
     from src.state import load_state, save_state, update_handle  # type: ignore
     from src.sources.nitter import NitterError, fetch_user_rss  # type: ignore
-    from src.sources.rss_articles import fetch_articles  # type: ignore
+    from src.sources.rss_articles import build_manual_articles, fetch_articles  # type: ignore
     from src.sources.twitterapi_io import fetch_user_tweets as fetch_via_tio  # type: ignore
     from src.fetch_x_data import TwitterAPIError  # type: ignore
     from src.summarize import LLMError, summarize  # type: ignore
 else:
     from .state import load_state, save_state, update_handle
     from .sources.nitter import NitterError, fetch_user_rss
-    from .sources.rss_articles import fetch_articles
+    from .sources.rss_articles import build_manual_articles, fetch_articles
     from .sources.twitterapi_io import fetch_user_tweets as fetch_via_tio
     from .fetch_x_data import TwitterAPIError
     from .summarize import LLMError, summarize
@@ -91,7 +91,7 @@ def _load_article_sources() -> list[dict]:
     for item in data.get("article_sources") or []:
         if not item.get("enabled"):
             continue
-        if not (item.get("rss_url") or "").strip():
+        if not (item.get("rss_url") or "").strip() and not (item.get("manual_articles") or []):
             continue
         sources.append(dict(item))
     return sources
@@ -207,9 +207,26 @@ def _fetch_article_sources(sources: list[dict], state: dict, cutoff_utc: dt.date
         name = (source_config.get("name") or "").strip()
         source_id = f"article:{source_config.get('kind') or 'article'}:{name}"
         errors: list[str] = []
+        articles = build_manual_articles(source_config)
         try:
-            articles = fetch_articles(source_config)
+            articles.extend(fetch_articles(source_config))
         except Exception as exc:
+            if articles:
+                errors.append(f"rss: {type(exc).__name__}: {exc}")
+            else:
+                results.append(
+                    {
+                        "name": name,
+                        "handle": source_id,
+                        "mode": "article",
+                        "new_tweets": [],
+                        "source": "none",
+                        "errors": [f"rss: {type(exc).__name__}: {exc}"],
+                    }
+                )
+                continue
+
+        if not articles:
             results.append(
                 {
                     "name": name,
@@ -217,7 +234,7 @@ def _fetch_article_sources(sources: list[dict], state: dict, cutoff_utc: dt.date
                     "mode": "article",
                     "new_tweets": [],
                     "source": "none",
-                    "errors": [f"rss: {type(exc).__name__}: {exc}"],
+                    "errors": errors,
                 }
             )
             continue
@@ -234,7 +251,7 @@ def _fetch_article_sources(sources: list[dict], state: dict, cutoff_utc: dt.date
                 "handle": source_id,
                 "mode": "article_rss",
                 "new_tweets": new_articles,
-                "source": f"rss:{source_config.get('kind') or 'article'}",
+                "source": f"article:{source_config.get('kind') or 'article'}",
                 "errors": errors,
             }
         )

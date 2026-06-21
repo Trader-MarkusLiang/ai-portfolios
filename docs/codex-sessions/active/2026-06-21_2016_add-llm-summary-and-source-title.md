@@ -42,6 +42,12 @@ Continue the existing investment brief project, correcting the product positioni
 - Updated README with article source setup instructions and the WeChat RSS requirement.
 - Verified with `python3 -m py_compile ...` and a mocked RSS feed parsing/flattening check.
 
+- Added manual WeChat article ingestion via `manual_articles` for concrete article URLs when no RSS feed exists.
+- Added the two provided article links under `投资人六便士` and `击球区小能手1` in `config/article_sources.yaml`.
+- Updated `src/sources/rss_articles.py` to build normalized article items from manual links without fetching WeChat pages.
+- Updated `src/main.py` so enabled article sources can combine manual links and RSS feeds, dedupe via state, and avoid repeating the same manual link on later normal runs.
+- Verified manual article import with a local check: first run yields two article items; second run with updated state yields zero repeats.
+
 ## Decisions
 
 - Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.
@@ -53,7 +59,7 @@ Continue the existing investment brief project, correcting the product positioni
 - Prompt and summarizer modules exist.
 - Main orchestration calls the summarizer and emits a Chinese source-aware Discord title under `全球投资动能监控`.
 - Current KOL config has seven real X accounts.
-- Article source config has `投资人六便士` and `击球区小能手1` registered but disabled until RSS URLs are provided.
+- Article source config has `投资人六便士` and `击球区小能手1` enabled with one manual WeChat article link each; RSS URLs can be added later for automation.
 - KOL display names are included in LLM inputs, so `上头资本（@sixpanny159920）` is visible when that account has new tweets.
 - Reports no longer append the raw tweet link appendix; curated links remain only in `证据链摘录`.
 - Latest Actions run showed `nitter:7`, then `0 新` after `last_seen` was persisted. Use `force_lookback_days` for manual LLM testing.
@@ -66,4 +72,4 @@ Continue the existing investment brief project, correcting the product positioni
 
 ## Open questions
 
-- Need RSS URLs for `投资人六便士` and `击球区小能手1`, then enable them in `config/article_sources.yaml` and run one manual Actions test.
+- Optional: replace placeholder manual article titles/summaries with real titles/summaries, or add RSS URLs for full automation.
