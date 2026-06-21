@@ -79,6 +79,13 @@ Continue the existing investment brief project, correcting the product positioni
 - Verified Python compilation and simulated summary ingestion; removed simulated raw and summary data before committing.
 - Direct UI capture test is blocked until macOS grants Accessibility permission to Terminal/Codex/osascript.
 
+
+- After the user granted Terminal Accessibility, live `osascript` capture still reported macOS assistive access denial, likely because Codex/osascript needs separate Accessibility permission.
+- Used the visible WeChat window as a one-time safe source to seed a concise group intelligence summary, then regenerated it through `.venv` with Ark/Kimi.
+- Updated `scripts/process_wechat_group_inbox.py` to load `.env`, strip accidental Markdown code fences, and constrain group-summary output length.
+- Updated `scripts/run_wechat_group_sync.sh` to prefer `.venv/bin/python` so scheduled runs can access installed dependencies and `.env` loading.
+- Prepared `data/wechat_groups/summaries/2026-06-21_微信投资群情报摘要.md` for GitHub as the report-consumable group-summary source; raw inbox and processed preview remain local/ignored.
+
 ## Decisions
 
 - Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.

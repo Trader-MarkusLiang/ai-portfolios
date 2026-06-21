@@ -15,6 +15,11 @@ try:
 except ImportError:  # pragma: no cover
     OpenAI = None  # type: ignore[assignment]
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover
+    load_dotenv = None  # type: ignore[assignment]
+
 ROOT = Path(__file__).resolve().parent.parent
 INBOX_DIR = ROOT / "data" / "wechat_groups" / "inbox"
 PROCESSED_DIR = ROOT / "data" / "wechat_groups" / "processed"
@@ -30,6 +35,9 @@ KEYWORDS = [
 
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
 DEFAULT_MODEL = "kimi-k2.6"
+
+if load_dotenv is not None:
+    load_dotenv(ROOT / ".env")
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -158,8 +166,9 @@ def _llm_summary(records: list[dict[str, Any]], now: dt.datetime) -> str | None:
     ]
     prompt = (
         "你是买方研究助理。请把以下微信群投资讨论整理成可并入《全球投资动能监控》的中文 Markdown 素材。"
-        "要求：1）只输出结构化摘要，不逐字转录；2）提炼最大公约数、产业链方向、A股/港股/中概映射、"
-        "关键论据、风险和待验证问题；3）保留少量必要摘录作为证据链；4）不要给确定性交易指令。\n\n"
+        "要求：1）不要使用代码围栏；2）只输出结构化摘要，不逐字转录；3）控制在 700 字以内；"
+        "4）必须包含：最大公约数、A股/港股/中概映射、证据链摘录、待验证问题；"
+        "5）不要给确定性交易指令。\n\n"
         f"生成时间：{now.isoformat()}\n"
         f"群聊素材 JSON：{json.dumps(payload, ensure_ascii=False)}"
     )
@@ -170,10 +179,13 @@ def _llm_summary(records: list[dict[str, Any]], now: dt.datetime) -> str | None:
             {"role": "system", "content": "你擅长把非公开投研讨论整理为审慎、可验证的投资情报。"},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=1800,
+        max_tokens=1200,
         temperature=0.2,
     )
     content = (response.choices[0].message.content or "").strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:markdown)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content).strip()
     return content or None
 
 
