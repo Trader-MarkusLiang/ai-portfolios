@@ -50,6 +50,30 @@ def _load_handles() -> list[str]:
     return handles
 
 
+def _extract_tweets(payload: dict) -> list[dict]:
+    """twitterapi.io last_tweets returns: {status, data: {tweets: [...]}, ...}."""
+    if not isinstance(payload, dict):
+        return []
+    inner = payload.get("data")
+    if isinstance(inner, dict):
+        tweets = inner.get("tweets")
+        if isinstance(tweets, list):
+            return tweets
+    tweets = payload.get("tweets")
+    return tweets if isinstance(tweets, list) else []
+
+
+def _fmt_tweet(t: dict) -> str:
+    text = (t.get("text") or "").replace("\n", " ").strip()
+    if len(text) > 220:
+        text = text[:220] + "…"
+    created = t.get("createdAt", "")
+    url = t.get("url") or t.get("twitterUrl") or ""
+    likes = t.get("likeCount", 0)
+    rts = t.get("retweetCount", 0)
+    return f"  - [{created}] {text}  (♥{likes} / 🔁{rts}) {url}"
+
+
 def _render_markdown(report_type: str, now_sh: dt.datetime, fetched: list[dict]) -> str:
     title = "早报" if report_type == "morning" else "晚报"
     lines = [
@@ -69,10 +93,10 @@ def _render_markdown(report_type: str, now_sh: dt.datetime, fetched: list[dict])
             if "error" in item:
                 lines.append(f"- @{handle} : 抓取失败 ({item['error']})")
                 continue
-            data = item.get("data") or {}
-            tweets = data.get("tweets") or data.get("data") or []
-            count = len(tweets) if isinstance(tweets, list) else "?"
-            lines.append(f"- @{handle} : 抓到 {count} 条")
+            tweets = _extract_tweets(item.get("data") or {})
+            lines.append(f"- @{handle} : 抓到 {len(tweets)} 条")
+            for t in tweets[:5]:
+                lines.append(_fmt_tweet(t))
     lines += [
         "",
         "## 备注",
@@ -109,7 +133,6 @@ def main() -> int:
     report_path = REPORTS_DIR / f"report_{now_sh.strftime('%Y%m%d')}_{report_type}.md"
     report_path.write_text(md, encoding="utf-8")
 
-    # Expose path for the workflow's next step (Discord push).
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
         with open(gh_out, "a", encoding="utf-8") as fh:
