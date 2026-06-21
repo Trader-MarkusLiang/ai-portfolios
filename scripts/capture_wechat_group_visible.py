@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import uuid
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+HELPER_APP = ROOT / "tools" / "WeChatGroupCapture.app"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from import_wechat_group_clipboard import _load_groups, import_text  # noqa: E402
@@ -63,13 +65,20 @@ def _pbcopy(text: str) -> None:
 
 
 def _run_osascript(group_name: str) -> None:
+    if HELPER_APP.exists():
+        result = subprocess.run(["open", "-W", str(HELPER_APP)], text=True, capture_output=True)
+        if result.returncode == 0:
+            return
+        message = (result.stderr or result.stdout or "").strip()
+        if message:
+            raise RuntimeError(message)
     result = subprocess.run(["osascript", "-e", APPLESCRIPT, group_name], text=True, capture_output=True)
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "").strip()
         if "不允许辅助访问" in message or "not allowed assistive access" in message:
             raise RuntimeError(
-                "macOS blocked UI automation. Open 系统设置 → 隐私与安全性 → 辅助功能, "
-                "then allow Terminal/Codex/osascript to control WeChat."
+                "macOS blocked UI automation. Open 系统设置 → 隐私与安全性 → 辅助功能, then allow "
+                f"{HELPER_APP} or /usr/bin/osascript to control WeChat."
             )
         raise RuntimeError(message or f"osascript failed with exit code {result.returncode}")
 
@@ -88,13 +97,15 @@ def main() -> int:
         return 2
 
     previous_clipboard = _pbpaste()
+    sentinel = f"__CODEX_WECHAT_CAPTURE_SENTINEL_{uuid.uuid4().hex}__"
     try:
+        _pbcopy(sentinel)
         _run_osascript(args.group_name)
         captured = _pbpaste().strip()
         if len(captured) < args.min_chars:
             print("ERROR: copied WeChat text is too short; capture likely failed", file=sys.stderr)
             return 1
-        if captured == previous_clipboard.strip():
+        if captured == sentinel:
             print("ERROR: clipboard did not change; capture likely failed", file=sys.stderr)
             return 1
         import_text(args.group_name, captured)

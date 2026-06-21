@@ -86,6 +86,11 @@ Continue the existing investment brief project, correcting the product positioni
 - Updated `scripts/run_wechat_group_sync.sh` to prefer `.venv/bin/python` so scheduled runs can access installed dependencies and `.env` loading.
 - Prepared `data/wechat_groups/summaries/2026-06-21_微信投资群情报摘要.md` for GitHub as the report-consumable group-summary source; raw inbox and processed preview remain local/ignored.
 
+
+- Investigated macOS Accessibility issue: Terminal, Codex, and Codex Computer Use are enabled, but `/usr/bin/osascript` remains hidden in System Settings and cannot directly control WeChat via System Events.
+- Added a visible helper app `tools/WeChatGroupCapture.app` plus source `tools/WeChatGroupCapture.applescript` so the user can grant Accessibility permission to a named local app instead of invisible `osascript`.
+- Updated `scripts/capture_wechat_group_visible.py` to prefer the helper app and use a sentinel clipboard value to avoid false failures when the clipboard already contains WeChat content.
+
 ## Decisions
 
 - Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.
