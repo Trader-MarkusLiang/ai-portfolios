@@ -209,24 +209,16 @@ def _fetch_article_sources(sources: list[dict], state: dict, cutoff_utc: dt.date
         name = (source_config.get("name") or "").strip()
         source_id = f"article:{source_config.get('kind') or 'article'}:{name}"
         errors: list[str] = []
-        articles = build_manual_articles(source_config)
+        articles: list[dict] = []
         try:
             articles.extend(fetch_articles(source_config))
         except Exception as exc:
-            if articles:
-                errors.append(f"rss: {type(exc).__name__}: {exc}")
-            else:
-                results.append(
-                    {
-                        "name": name,
-                        "handle": source_id,
-                        "mode": "article",
-                        "new_tweets": [],
-                        "source": "none",
-                        "errors": [f"rss: {type(exc).__name__}: {exc}"],
-                    }
-                )
-                continue
+            errors.append(f"rss: {type(exc).__name__}: {exc}")
+        seen_urls = {article.get("url") for article in articles if article.get("url")}
+        for article in build_manual_articles(source_config):
+            if article.get("url") not in seen_urls:
+                articles.append(article)
+                seen_urls.add(article.get("url"))
 
         if not articles:
             results.append(

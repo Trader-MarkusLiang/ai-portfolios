@@ -65,6 +65,11 @@ Continue the existing investment brief project, correcting the product positioni
 
 - Updated GitHub Actions schedule to run daily at Beijing 08:00 (`0 0 * * *` UTC).
 
+- Switched the planned local WeChat sync scheduling from launchd to Codex local automations per user preference.
+- Kept `scripts/sync_wechat_articles.py` and `scripts/run_wechat_sync.sh` as the reusable sync entrypoint for the Codex automation.
+- Updated sync behavior to prefer RSS articles over manual placeholders for the same URL and avoid duplicate records.
+- Verified `scripts/run_wechat_sync.sh --no-git` succeeds with 11 unique WeChat article records and no duplicate URLs.
+
 ## Decisions
 
 - Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.
@@ -89,4 +94,4 @@ Continue the existing investment brief project, correcting the product positioni
 
 ## Open questions
 
-- Local WeWe RSS URLs are configured. For GitHub Actions automation, deploy WeWe RSS to a public HTTPS endpoint or keep using manual articles for cloud runs.
+- Local WeWe RSS URLs are configured. Use Codex local automation to sync articles multiple times per day; deploy WeWe RSS publicly only if GitHub Actions must fetch directly.

@@ -17,6 +17,8 @@ venv/
 data/*
 !data/.gitkeep
 !data/last_seen.json
+!data/wechat_articles/
+!data/wechat_articles/**
 
 # reports: ignore generated files but keep folder
 reports/*
