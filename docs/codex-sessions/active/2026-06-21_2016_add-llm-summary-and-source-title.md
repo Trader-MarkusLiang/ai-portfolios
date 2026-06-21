@@ -22,6 +22,7 @@ Continue the existing investment brief project by adding LLM summarization using
 - Added force lookback workflow input, LLM summary archive under `reports/summaries/`, and upgraded Discord-friendly report prompt.
 - Added PDF rendering for Discord delivery while keeping Markdown summaries archived.
 - Upgraded rendering plan to Markdown -> HTML/CSS -> Chromium PDF, with ReportLab fallback.
+- Redesigned prompt around investment synthesis: consensus, disagreement, evidence strength, opportunity matrix, validation checklist.
 
 ## Decisions
 

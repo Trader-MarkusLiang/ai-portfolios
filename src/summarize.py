@@ -28,7 +28,7 @@ DEFAULT_MODEL = "kimi-k2.6"
 
 MAX_TWEETS = 200          # cap items fed into the model
 MAX_TEXT_LEN = 600        # cap each tweet text length
-MAX_OUTPUT_TOKENS = 1800  # ~6KB markdown, fits Discord with attachment fallback
+MAX_OUTPUT_TOKENS = 2600
 
 
 class LLMError(RuntimeError):

@@ -30,6 +30,10 @@ CSS = """
   --amber-soft: #fffbeb;
   --green: #166534;
   --green-soft: #f0fdf4;
+  --red: #991b1b;
+  --red-soft: #fef2f2;
+  --purple: #6d28d9;
+  --purple-soft: #f5f3ff;
 }
 @page { size: A4; margin: 16mm 14mm 18mm; }
 * { box-sizing: border-box; }
@@ -46,9 +50,12 @@ body {
   margin: 0 auto;
 }
 .cover {
-  border-bottom: 2px solid var(--ink);
-  padding-bottom: 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--ink);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 16px 18px;
   margin-bottom: 18px;
+  border-radius: 10px;
 }
 h1 {
   margin: 0 0 8px;
@@ -60,7 +67,7 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .pill {
   display: inline-block;
@@ -70,6 +77,11 @@ h1 {
   color: var(--muted);
   background: var(--panel);
   font-size: 10.5px;
+}
+.pill:nth-child(3), .pill:nth-child(4) {
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: #bfdbfe;
 }
 h2 {
   margin: 18px 0 8px;
@@ -106,16 +118,17 @@ table {
   width: 100%;
   border-collapse: collapse;
   margin: 9px 0 12px;
-  font-size: 10.5px;
+  font-size: 10px;
   break-inside: avoid;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
 }
 th, td {
   border: 1px solid var(--line);
-  padding: 6px 7px;
+  padding: 7px 8px;
   vertical-align: top;
 }
 th {
-  background: var(--panel);
+  background: #eef2ff;
   color: #0f172a;
   font-weight: 700;
 }
@@ -145,6 +158,19 @@ summary {
   font-weight: 700;
   color: #0f172a;
 }
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.badge-p1, .badge-a { color: var(--red); background: var(--red-soft); border-color: #fecaca; }
+.badge-p2, .badge-b { color: var(--amber); background: var(--amber-soft); border-color: #fde68a; }
+.badge-p3, .badge-c { color: var(--blue); background: var(--blue-soft); border-color: #bfdbfe; }
+.badge-d { color: var(--muted); background: var(--panel); }
 .source-index h2 {
   color: var(--green);
   background: var(--green-soft);
@@ -165,13 +191,15 @@ def _clean_inline(text: str) -> str:
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(r"(?<![A-Za-z0-9])P([123])(?![A-Za-z0-9])", lambda m: f'<span class="badge badge-p{m.group(1)}">P{m.group(1)}</span>', text)
+    text = re.sub(r"(?<![A-Za-z0-9])\[([ABCD])\](?![A-Za-z0-9])", lambda m: f'<span class="badge badge-{m.group(1).lower()}">{m.group(1)}</span>', text)
     protected = []
 
     def protect(match: re.Match[str]) -> str:
         protected.append(match.group(0))
         return f"@@HTML{len(protected) - 1}@@"
 
-    text = re.sub(r"</?(?:strong|code|a)(?:\s+href=\"[^\"]+\")?>", protect, text)
+    text = re.sub(r"</?(?:strong|code|a|span)(?:\s+(?:href|class)=\"[^\"]+\")?>", protect, text)
     text = escape(text)
     for idx, raw in enumerate(protected):
         text = text.replace(f"@@HTML{idx}@@", raw)

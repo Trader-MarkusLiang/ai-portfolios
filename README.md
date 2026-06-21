@@ -28,10 +28,12 @@
 
 ```
 Nitter RSS (主) ─┐
-                 ├─► Python (normalize → 增量过滤 → LLM 总结) ─► reports/*.md ─► reports/*.pdf ─► Discord
-twitterapi.io ───┘                                                              ↓
-                                                                     data/last_seen.json (commit 回仓)
+                 ├─► Python (normalize → 增量过滤 → Kimi 合成分析) ─► Markdown/HTML/PDF ─► Discord
+twitterapi.io ───┘                                                                    ↓
+                                                                           data/last_seen.json (commit 回仓)
 ```
+
+Kimi 的任务不是逐条复述推文，而是把多个 KOL 的碎片信息合成为“研究命题、最大公约数、分歧与反证、证据强度、明日验证清单”。
 
 ## 本地运行
 
