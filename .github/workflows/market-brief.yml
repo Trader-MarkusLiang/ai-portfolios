@@ -52,6 +52,7 @@ jobs:
       - name: Render PDF
         id: pdf
         if: ${{ steps.build.outputs.report_path != '' }}
+        continue-on-error: true
         run: |
           pdf_path="${{ steps.build.outputs.report_path }}"
           pdf_path="${pdf_path%.md}.pdf"
@@ -59,12 +60,17 @@ jobs:
           echo "pdf_path=$pdf_path" >> "$GITHUB_OUTPUT"
 
       - name: Send to Discord
-        if: ${{ steps.pdf.outputs.pdf_path != '' && steps.build.outputs.discord_title != '' }}
+        if: ${{ steps.build.outputs.report_path != '' && steps.build.outputs.discord_title != '' }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python scripts/send_discord.py "${{ steps.pdf.outputs.pdf_path }}" \
-            --title "${{ steps.build.outputs.discord_title }}"
+          if [ -n "${{ steps.pdf.outputs.pdf_path }}" ] && [ -f "${{ steps.pdf.outputs.pdf_path }}" ]; then
+            python scripts/send_discord.py "${{ steps.pdf.outputs.pdf_path }}" \
+              --title "${{ steps.build.outputs.discord_title }}"
+          else
+            python scripts/send_discord.py "${{ steps.build.outputs.report_path }}" \
+              --title "${{ steps.build.outputs.discord_title }} · pdf-failed"
+          fi
 
       - name: Persist last_seen.json
         if: always()

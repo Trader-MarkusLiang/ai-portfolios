@@ -152,8 +152,8 @@ def _fetch_one_handle(
         if tweets:
             return tweets[:fetch_count], "nitter", errors
         errors.append("nitter: empty")
-    except NitterError as exc:
-        errors.append(f"nitter: {exc}")
+    except Exception as exc:
+        errors.append(f"nitter: {type(exc).__name__}: {exc}")
 
     if not allow_tio:
         return [], "none", errors
@@ -161,8 +161,8 @@ def _fetch_one_handle(
     try:
         tweets = fetch_via_tio(handle, count=fetch_count)
         return tweets, "twitterapi.io", errors
-    except TwitterAPIError as exc:
-        errors.append(f"twitterapi.io: {exc}")
+    except Exception as exc:
+        errors.append(f"twitterapi.io: {type(exc).__name__}: {exc}")
         return [], "none", errors
 
 
