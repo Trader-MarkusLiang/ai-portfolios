@@ -15,15 +15,22 @@ kol_accounts:
     weight: 1.0
     tags: ["sentiment", "US stocks", "market"]
 
-  # - name: 华尔街观察Xtrader
-  #   handle: ""
-  #   weight: 1.1
-  #   tags: ["market", "macro"]
-  # - name: 库哥
-  #   handle: ""
-  #   weight: 1.0
-  #   tags: ["US stocks", "AI"]
-  # - name: 李志 | Rational Investing
-  #   handle: ""
-  #   weight: 1.2
-  #   tags: ["fundamental", "AI infra"]
+  - name: 华尔街观察
+    handle: cnfinancewatch
+    weight: 1.1
+    tags: ["market", "macro", "US stocks"]
+
+  - name: 库哥
+    handle: kugo_A10
+    weight: 1.0
+    tags: ["US stocks", "AI"]
+
+  - name: 李志 | Rational Investing
+    handle: LZRationalnvest
+    weight: 1.2
+    tags: ["fundamental", "AI infra", "valuation"]
+
+  - name: 上头资本
+    handle: sixpanny159920
+    weight: 1.0
+    tags: ["market", "sentiment", "US stocks"]
