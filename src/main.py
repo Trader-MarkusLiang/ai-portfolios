@@ -45,12 +45,14 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
     from src.state import load_state, save_state, update_handle  # type: ignore
     from src.sources.nitter import NitterError, fetch_user_rss  # type: ignore
+    from src.sources.rss_articles import fetch_articles  # type: ignore
     from src.sources.twitterapi_io import fetch_user_tweets as fetch_via_tio  # type: ignore
     from src.fetch_x_data import TwitterAPIError  # type: ignore
     from src.summarize import LLMError, summarize  # type: ignore
 else:
     from .state import load_state, save_state, update_handle
     from .sources.nitter import NitterError, fetch_user_rss
+    from .sources.rss_articles import fetch_articles
     from .sources.twitterapi_io import fetch_user_tweets as fetch_via_tio
     from .fetch_x_data import TwitterAPIError
     from .summarize import LLMError, summarize
@@ -78,6 +80,21 @@ def _load_nitter_instances() -> list[str] | None:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     instances = data.get("nitter_instances") or []
     return [s.strip() for s in instances if isinstance(s, str) and s.strip()] or None
+
+
+def _load_article_sources() -> list[dict]:
+    path = CONFIG_DIR / "article_sources.yaml"
+    if not path.exists():
+        return []
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    sources: list[dict] = []
+    for item in data.get("article_sources") or []:
+        if not item.get("enabled"):
+            continue
+        if not (item.get("rss_url") or "").strip():
+            continue
+        sources.append(dict(item))
+    return sources
 
 
 def _allow_tio_fallback() -> bool:
@@ -134,6 +151,10 @@ def _fmt_tweet(t: dict) -> str:
     return f"  - [{created}] {text}{meta} {url}".rstrip()
 
 
+def _item_sort_key(item: dict) -> tuple[float, int]:
+    return (float(item.get("createdAtTs") or 0), _id_int(item))
+
+
 def _fetch_one_handle(
     handle: str,
     nitter_instances: list[str] | None,
@@ -161,19 +182,78 @@ def _fetch_one_handle(
         return [], "none", errors
 
 
+def _filter_articles(articles: list[dict], last_id: str | None, cutoff_utc: dt.datetime) -> list[dict]:
+    cutoff_ts = cutoff_utc.timestamp()
+    out: list[dict] = []
+    seen_last = not last_id
+    sorted_articles = sorted(articles, key=_item_sort_key)
+    if last_id and all(str(article.get("id") or "") != last_id for article in sorted_articles):
+        seen_last = True
+    for article in sorted_articles:
+        article_id = str(article.get("id") or "")
+        ts = float(article.get("createdAtTs") or 0)
+        if not seen_last:
+            if article_id == last_id:
+                seen_last = True
+            continue
+        if ts == 0.0 or ts >= cutoff_ts:
+            out.append(article)
+    return out
+
+
+def _fetch_article_sources(sources: list[dict], state: dict, cutoff_utc: dt.datetime, now_iso: str, force_days: int) -> list[dict]:
+    results: list[dict] = []
+    for source_config in sources:
+        name = (source_config.get("name") or "").strip()
+        source_id = f"article:{source_config.get('kind') or 'article'}:{name}"
+        errors: list[str] = []
+        try:
+            articles = fetch_articles(source_config)
+        except Exception as exc:
+            results.append(
+                {
+                    "name": name,
+                    "handle": source_id,
+                    "mode": "article",
+                    "new_tweets": [],
+                    "source": "none",
+                    "errors": [f"rss: {type(exc).__name__}: {exc}"],
+                }
+            )
+            continue
+
+        last_id = None if force_days else (state.get(source_id) or {}).get("last_tweet_id")
+        new_articles = _filter_articles(articles, last_id, cutoff_utc)
+        if not force_days and articles:
+            newest = str(max(articles, key=_item_sort_key).get("id") or "")
+            if newest:
+                update_handle(state, source_id, newest, now_iso)
+        results.append(
+            {
+                "name": name,
+                "handle": source_id,
+                "mode": "article_rss",
+                "new_tweets": new_articles,
+                "source": f"rss:{source_config.get('kind') or 'article'}",
+                "errors": errors,
+            }
+        )
+    return results
+
+
 def _render_raw_markdown(now_sh: dt.datetime, results: list[dict], llm_error: str | None = None) -> str:
     lines = [
         f"# {REPORT_TITLE}（原文模式）" if llm_error else f"# {REPORT_TITLE}",
         "",
         f"生成时间：{now_sh.strftime('%Y-%m-%d %H:%M')} Asia/Shanghai",
         "窗口：过去 24 小时（新账号回溯 7 天）",
-        "数据源：Nitter RSS 优先，twitterapi.io 兜底",
+        "数据源：Nitter RSS 优先，twitterapi.io 兜底；文章源支持 RSS/Atom",
         "",
     ]
     if llm_error:
         lines += [f"> ⚠️ LLM 调用失败，退回原文模式：{llm_error}", ""]
     lines += [
-        "## KOL 新增推文",
+        "## 新增内容",
         "",
     ]
     total_new = 0
@@ -187,13 +267,14 @@ def _render_raw_markdown(now_sh: dt.datetime, results: list[dict], llm_error: st
             new_tweets = item.get("new_tweets") or []
             source = item.get("source") or "none"
             errors = item.get("errors") or []
-            tag = "新账号 / 回溯 7 天" if mode == "bootstrap" else "增量"
+            tag = "文章 RSS" if mode == "article_rss" else ("新账号 / 回溯 7 天" if mode == "bootstrap" else "增量")
             if not new_tweets and source == "none":
                 err_summary = "; ".join(errors) or "no data"
                 lines.append(f"- @{handle} : 抓取失败 ({err_summary})")
                 continue
             total_new += len(new_tweets)
-            lines.append(f"- {name}（@{handle}）: 新增 {len(new_tweets)} 条（{tag}，来源 {source}）")
+            label = name if mode == "article_rss" else f"{name}（@{handle}）"
+            lines.append(f"- {label}: 新增 {len(new_tweets)} 条（{tag}，来源 {source}）")
             for t in new_tweets:
                 lines.append(_fmt_tweet(t))
     lines += [
@@ -218,12 +299,14 @@ def _flatten_new_tweets(results: list[dict]) -> list[dict]:
     for item in results:
         handle = item["handle"]
         name = item.get("name") or handle
-        kol_label = f"{name}（@{handle}）" if name and name != handle else f"@{handle}"
+        is_article = str(item.get("mode") or "").startswith("article")
+        kol_label = name if is_article else (f"{name}（@{handle}）" if name and name != handle else f"@{handle}")
         for tweet in item.get("new_tweets") or []:
             enriched = dict(tweet)
             enriched["kol"] = kol_label
             enriched["name"] = name
             enriched["handle"] = handle
+            enriched["contentType"] = enriched.get("contentType") or ("article" if is_article else "tweet")
             flat.append(enriched)
     return flat
 
@@ -334,6 +417,7 @@ def main() -> int:
     REPORTS_DIR.mkdir(exist_ok=True)
 
     accounts = _load_kol_accounts()
+    article_sources = _load_article_sources()
     nitter_instances = _load_nitter_instances()
     allow_tio = _allow_tio_fallback()
 
@@ -384,6 +468,8 @@ def main() -> int:
                 "errors": errors,
             }
         )
+
+    results.extend(_fetch_article_sources(article_sources, state, bootstrap_cutoff, now_sh.isoformat(), force_days))
 
     if not force_days:
         save_state(STATE_PATH, state)

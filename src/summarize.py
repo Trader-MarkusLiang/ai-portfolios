@@ -44,6 +44,8 @@ def _pack(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         packed.append(
             {
                 "kol": it.get("kol") or it.get("handle") or "",
+                "contentType": it.get("contentType") or "tweet",
+                "title": it.get("title") or "",
                 "text": text,
                 "url": it.get("url") or "",
                 "createdAt": it.get("createdAt") or "",

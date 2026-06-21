@@ -35,6 +35,13 @@ Continue the existing investment brief project, correcting the product positioni
 - Attempted local PDF rendering, but local Python lacks `playwright` and `reportlab`; GitHub Actions installs both, so rendering remains expected to work in CI.
 - Updated README, GitHub Actions display name, report title, Discord title, generated filenames, and LLM prompt to emphasize global leading signals mapped back to China domestic capital markets.
 
+- Added `config/article_sources.yaml` with disabled WeChat targets `投资人六便士` and `击球区小能手1`, ready for RSS URLs.
+- Added `src/sources/rss_articles.py` to parse generic RSS/Atom article feeds without new dependencies.
+- Integrated enabled article feeds into `src/main.py` using the existing state file and LLM content pipeline.
+- Updated `src/summarize.py` and `prompts/daily_brief.md` so the LLM can distinguish tweets from articles.
+- Updated README with article source setup instructions and the WeChat RSS requirement.
+- Verified with `python3 -m py_compile ...` and a mocked RSS feed parsing/flattening check.
+
 ## Decisions
 
 - Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.
@@ -45,7 +52,8 @@ Continue the existing investment brief project, correcting the product positioni
 
 - Prompt and summarizer modules exist.
 - Main orchestration calls the summarizer and emits a Chinese source-aware Discord title under `全球投资动能监控`.
-- Current KOL config has seven real accounts.
+- Current KOL config has seven real X accounts.
+- Article source config has `投资人六便士` and `击球区小能手1` registered but disabled until RSS URLs are provided.
 - KOL display names are included in LLM inputs, so `上头资本（@sixpanny159920）` is visible when that account has new tweets.
 - Reports no longer append the raw tweet link appendix; curated links remain only in `证据链摘录`.
 - Latest Actions run showed `nitter:7`, then `0 新` after `last_seen` was persisted. Use `force_lookback_days` for manual LLM testing.
@@ -58,4 +66,4 @@ Continue the existing investment brief project, correcting the product positioni
 
 ## Open questions
 
-- Need one GitHub Actions manual run with `force_lookback_days=1` to verify Discord attachment uses the `全球投资动能监控` filename and China-market-oriented synthesis prompt.
+- Need RSS URLs for `投资人六便士` and `击球区小能手1`, then enable them in `config/article_sources.yaml` and run one manual Actions test.

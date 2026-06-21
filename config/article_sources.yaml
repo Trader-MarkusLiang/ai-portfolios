@@ -1,0 +1,16 @@
+# 通用文章源。优先接入 RSS/Atom，不直接爬微信公众号网页。
+#
+# 微信公众号建议先通过自建 WeWe RSS / RSSHub 等服务转成 RSS，再把链接填到
+# rss_url，并把 enabled 改为 true。没有 rss_url 的条目会被跳过，不影响日报。
+article_sources:
+  - name: 投资人六便士
+    kind: wechat
+    enabled: false
+    rss_url: ""
+    tags: ["投资", "国内市场", "全球映射"]
+
+  - name: 击球区小能手1
+    kind: wechat
+    enabled: false
+    rss_url: ""
+    tags: ["投资", "国内市场", "交易框架"]
