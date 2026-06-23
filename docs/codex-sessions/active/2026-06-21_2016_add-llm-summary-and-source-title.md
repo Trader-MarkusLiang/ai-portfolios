@@ -139,3 +139,9 @@ Continue the existing investment brief project, correcting the product positioni
 - Created `docs/automation-runs.md` as the unified automation run ledger so future results can be reviewed in one document instead of opening per-run threads.
 - Updated both Codex automations to call the wrapper and instruct each run to report only the ledger path and archive the run thread afterward.
 - Archived prior visible automation run threads for the two WeChat sync jobs to reduce sidebar clutter.
+
+- Audited `docs/automation-runs.md` on 2026-06-24 after the overnight automation window. The ledger was still empty, so the local cron automations did not successfully reach `scripts/run_automation_job.sh`.
+- Inspected Codex automation session JSONL logs for `019ef4d2-3fdc-7f01-a9b4-382c867587b9` and `019ef4db-67d0-7563-bbae-9678ca021dc2`: both sessions contain only startup/user prompt/task_complete records and no assistant/tool execution records, ending with `last_agent_message: null`.
+- Manually verified `NO_GIT=1 scripts/run_automation_job.sh wechat_articles` succeeds and writes a row to `docs/automation-runs.md`; reverted the manual test row afterward so the ledger remains reserved for real scheduled runs.
+- Updated both Codex automations from model `gpt-5.4-mini` to the configured local default `gpt-5.4`, because the machine's active provider config is `local-qwen-rapid` with default model `gpt-5.4` and the automation sessions appeared to stall before execution.
+- Archived the two failed automation threads to keep the sidebar clean.
