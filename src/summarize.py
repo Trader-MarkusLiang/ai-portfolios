@@ -7,6 +7,7 @@ Env vars:
   ARK_API_KEY     required
   ARK_BASE_URL    default https://ark.cn-beijing.volces.com/api/coding/v3
   ARK_MODEL       default kimi-k2.6
+  ARK_TIMEOUT_SECONDS default 75
 """
 
 from __future__ import annotations
@@ -29,46 +30,47 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
 DEFAULT_MODEL = "kimi-k2.6"
+DEFAULT_TIMEOUT_SECONDS = 75.0
 
-MAX_ITEMS = 32
-MAX_RETRY_ITEMS = 18
+MAX_ITEMS = 24
+MAX_RETRY_ITEMS = 14
 MAX_TEXT_LEN = 260
 MAX_ARCHIVE_TEXT_LEN = 900
 MAX_RETRY_TEXT_LEN = 180
-MAX_PAYLOAD_CHARS = 9000
-MAX_RETRY_PAYLOAD_CHARS = 5200
-MAX_OUTPUT_TOKENS = 4096
+MAX_PAYLOAD_CHARS = 7000
+MAX_RETRY_PAYLOAD_CHARS = 3600
+MAX_OUTPUT_TOKENS = 3200
 REQUIRED_SECTIONS = (
-    "## 一页结论",
-    "## 今日最大公约数",
-    "## 机会线索矩阵",
-    "## 分歧与风险",
+    "## 市场动量总览",
+    "## 动量变化",
+    "## 风险雷达",
+    "## 交易策略",
     "## 证据链摘录",
-    "## 明日行动清单",
+    "## 明日验证",
 )
 
 SYSTEM_PROMPT = "你是中文买方投研助手。直接输出最终报告，不输出思考过程。"
 
-USER_TEMPLATE = """请基于下面 JSON 生成中文《全球投资动能监控》日报。目标是从全球信息中提炼对中国国内资本市场有领先意义的投资线索。不要复述流水账，要做交叉整合。控制在 800-1100 中文字，必须完整收尾。
+USER_TEMPLATE = """请基于下面 JSON 生成中文《全球投资动能监控》日报。目标是从全球信息中提炼对中国国内资本市场有领先意义的市场动量、风险和交易策略。不要复述流水账，要做交叉整合。`contextRole=latest` 是本次最新抓取，`contextRole=recent` 是最近几天滚动上下文；请用 recent 作为基准，判断 latest 是否强化、削弱或反转原有动量。控制在 650-900 中文字，必须完整收尾。
 
 固定结构：
-## 一页结论
-- 3条最重要投资命题；每条写清：结论、证据强度[A/B/C/D]、对A股/港股/中国产业链的含义。
+## 市场动量总览
+- 2到3条最重要动量结论；写清方向、证据强度[A/B/C/D]、国内映射。
 
-## 今日最大公约数
-- 2到4条跨来源共同信号；若共识弱，明确说明。
+## 动量变化
+- 2到3条“强化 / 降温 / 反转 / 待确认”变化。
 
-## 机会线索矩阵
-| 主题 | 国内映射 | 核心触发 | 证据强度 | 下一步验证 |
+## 风险雷达
+- 2到3条；说明风险触发条件、若判断错会错在哪里。
+
+## 交易策略
+| 策略主题 | 国内映射 | 仓位态度 | 触发条件 | 风控信号 |
 |---|---|---|---|---|
 
-## 分歧与风险
-- 2到4条；说明如果判断错，错在哪里。
-
 ## 证据链摘录
-- 5到8条精选证据。格式：`[强度] 来源：一句话摘要；链接：URL`。没有链接则写本地归档。
+- 4到6条精选证据。格式：`[强度] 来源：一句话摘要；链接：URL`。没有链接则写本地归档。
 
-## 明日行动清单
+## 明日验证
 | 要验证什么 | 为什么重要 | 观察指标/来源 |
 |---|---|---|
 
@@ -79,15 +81,15 @@ JSON:
 {{items}}
 """
 
-RETRY_TEMPLATE = """请基于 JSON 生成一份 600-850 字中文投资分析日报。只输出 Markdown 正文，不要推理过程，必须完整收尾。
+RETRY_TEMPLATE = """请基于 JSON 生成一份 450-700 字中文投资分析日报。只输出 Markdown 正文，不要推理过程，必须完整收尾。每个小节最多 3 行。
 
 结构必须包含：
-## 一页结论
-## 今日最大公约数
-## 机会线索矩阵
-## 分歧与风险
+## 市场动量总览
+## 动量变化
+## 风险雷达
+## 交易策略
 ## 证据链摘录
-## 明日行动清单
+## 明日验证
 ---
 仅供研究，不构成投资建议。
 
@@ -113,6 +115,8 @@ def _importance_score(item: dict[str, Any]) -> tuple[int, int]:
     source = item.get("source") or ""
     engagement = _to_int(item.get("likeCount")) + _to_int(item.get("retweetCount")) * 3
     priority = 0
+    if item.get("contextRole") == "latest":
+        priority += 40_000
     if content_type == "wechat_group_archive":
         priority += 30_000
     elif content_type == "article":
@@ -175,6 +179,8 @@ def _compact_record(item: dict[str, Any], max_text_len: int) -> dict[str, Any]:
     return {
         "source": item.get("kol") or item.get("handle") or "",
         "type": item.get("contentType") or "tweet",
+        "contextRole": item.get("contextRole") or "latest",
+        "contextDate": item.get("contextDate") or "",
         "title": item.get("title") or "",
         "text": _clip_text(item, max_text_len),
         "url": item.get("url") or "",
@@ -241,12 +247,51 @@ def _call_model(client: Any, model: str, user_template: str, packed: list[dict[s
     return (resp.choices[0].message.content or "").strip(), resp
 
 
+def _timeout_seconds() -> float:
+    raw = (os.environ.get("ARK_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        return max(10.0, min(float(raw), 180.0))
+    except ValueError:
+        return DEFAULT_TIMEOUT_SECONDS
+
+
+def _has_required_sections(content: str) -> bool:
+    return all(section in content for section in REQUIRED_SECTIONS)
+
+
+def _normalize_report(content: str) -> str:
+    content = content.strip()
+    if len(content) < 350:
+        return ""
+    if not _has_required_sections(content):
+        return ""
+    if "仅供研究，不构成投资建议" not in content:
+        content = content.rstrip() + "\n\n---\n仅供研究，不构成投资建议。"
+    return content
+
+
+def _ensure_evidence_links(content: str, records: list[dict[str, Any]]) -> str:
+    evidence_header = "## 证据链摘录"
+    next_header = "## 明日验证"
+    if evidence_header not in content or "链接：" in content:
+        return content
+    start = content.find(evidence_header)
+    end = content.find(next_header, start)
+    if end == -1:
+        return content
+    lines = _evidence_lines(records, limit=4)
+    insert = evidence_header + "\n" + "\n".join(lines) + "\n"
+    return content[:start] + insert + content[end:]
+
+
 def _is_complete_report(content: str) -> bool:
-    if len(content) < 600:
+    if len(content) < 350:
         return False
     if "仅供研究，不构成投资建议" not in content:
         return False
-    return all(section in content for section in REQUIRED_SECTIONS)
+    return _has_required_sections(content)
 
 
 def summarize(items: list[dict[str, Any]]) -> str:
@@ -258,7 +303,7 @@ def summarize(items: list[dict[str, Any]]) -> str:
 
     base_url = (os.environ.get("ARK_BASE_URL") or DEFAULT_BASE_URL).strip()
     model = (os.environ.get("ARK_MODEL") or DEFAULT_MODEL).strip()
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout_seconds())
 
     packed = _pack(
         items,
@@ -266,14 +311,6 @@ def summarize(items: list[dict[str, Any]]) -> str:
         max_text_len=MAX_TEXT_LEN,
         max_payload_chars=MAX_PAYLOAD_CHARS,
     )
-    try:
-        content, resp = _call_model(client, model, USER_TEMPLATE, packed)
-    except Exception as exc:  # network / auth / model errors
-        raise LLMError(f"{type(exc).__name__}: {exc}") from exc
-
-    if _is_complete_report(content):
-        return content
-
     retry_packed = _pack(
         items,
         max_items=MAX_RETRY_ITEMS,
@@ -281,17 +318,159 @@ def summarize(items: list[dict[str, Any]]) -> str:
         max_payload_chars=MAX_RETRY_PAYLOAD_CHARS,
     )
     try:
+        content, resp = _call_model(client, model, USER_TEMPLATE, packed)
+    except Exception as exc:  # network / auth / model errors
+        first_error = f"{type(exc).__name__}: {exc}"
+        try:
+            content, retry_resp = _call_model(client, model, RETRY_TEMPLATE, retry_packed)
+        except Exception as retry_exc:
+            raise LLMError(
+                f"{first_error}; retry_error={type(retry_exc).__name__}: {retry_exc}; "
+                f"packed_items={len(packed)}; retry_items={len(retry_packed)}"
+            ) from retry_exc
+        normalized = _normalize_report(content)
+        if normalized:
+            return _ensure_evidence_links(normalized, retry_packed)
+        detail = "empty response from model" if not content else "incomplete response from model"
+        raise LLMError(
+            f"{first_error}; retry_{detail}; retry_finish={_finish_reason(retry_resp)}; "
+            f"retry_response_id={_response_id(retry_resp)}; packed_items={len(packed)}; "
+            f"retry_items={len(retry_packed)}"
+        )
+
+    normalized = _normalize_report(content)
+    if normalized:
+        return _ensure_evidence_links(normalized, packed)
+
+    try:
         content, retry_resp = _call_model(client, model, RETRY_TEMPLATE, retry_packed)
     except Exception as exc:
         raise LLMError(
             f"empty response from model; first_finish={_finish_reason(resp)}; "
             f"first_response_id={_response_id(resp)}; retry_error={type(exc).__name__}: {exc}"
         ) from exc
-    if _is_complete_report(content):
-        return content
+    normalized = _normalize_report(content)
+    if normalized:
+        return _ensure_evidence_links(normalized, retry_packed)
     detail = "empty response from model" if not content else "incomplete response from model"
     raise LLMError(
         f"{detail}; first_finish={_finish_reason(resp)}; retry_finish={_finish_reason(retry_resp)}; "
         f"first_response_id={_response_id(resp)}; retry_response_id={_response_id(retry_resp)}; "
         f"packed_items={len(packed)}; retry_items={len(retry_packed)}"
     )
+
+
+THEME_KEYWORDS = {
+    "AI算力链": ("AI", "算力", "GPU", "ASIC", "TPU", "CPO", "光模块", "数据中心"),
+    "存储/HBM": ("DRAM", "HBM", "CXL", "存储", "美光", "海力士", "Siri", "苹果"),
+    "半导体设备材料": ("半导体", "先进封装", "CoPoS", "台积电", "MLCC", "封装"),
+    "港股/中概成长": ("港股", "恒生", "中概", "03121", "03119", "加仓", "加cang"),
+    "机器人/端侧AI": ("机器人", "具身", "端侧", "手机", "Siri", "苹果AI"),
+    "宏观风险": ("降息", "通胀", "美元", "利率", "关税", "地缘", "风险"),
+}
+
+
+def _theme_counts(records: list[dict[str, Any]], role: str | None = None) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        if role and record.get("contextRole") != role:
+            continue
+        text = f"{record.get('title') or ''} {record.get('text') or ''}"
+        for theme, keywords in THEME_KEYWORDS.items():
+            if any(keyword in text for keyword in keywords):
+                counts[theme] = counts.get(theme, 0) + 1
+    return counts
+
+
+def _top_themes(records: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    counts = _theme_counts(records)
+    return sorted(counts.items(), key=lambda item: item[1], reverse=True)[:4] or [("暂无高一致性主题", 0)]
+
+
+def _evidence_lines(records: list[dict[str, Any]], limit: int = 6) -> list[str]:
+    selected = sorted(
+        records,
+        key=lambda record: (
+            1 if record.get("contextRole") == "latest" else 0,
+            _to_int(record.get("heat")),
+            len(record.get("text") or ""),
+        ),
+        reverse=True,
+    )[:limit]
+    lines: list[str] = []
+    for record in selected:
+        source = record.get("source") or "未知来源"
+        text = (record.get("text") or record.get("title") or "").strip()
+        if len(text) > 90:
+            text = text[:90] + "…"
+        url = record.get("url") or "本地归档"
+        strength = "B" if record.get("contextRole") == "latest" else "C"
+        lines.append(f"- [{strength}] {source}：{text}；链接：{url}")
+    return lines or ["- [D] 暂无可用证据；链接：本地归档"]
+
+
+def fallback_summary(items: list[dict[str, Any]], error: str) -> str:
+    records = _pack(
+        items,
+        max_items=MAX_ITEMS,
+        max_text_len=MAX_TEXT_LEN,
+        max_payload_chars=MAX_PAYLOAD_CHARS,
+    )
+    latest_counts = _theme_counts(records, "latest")
+    recent_counts = _theme_counts(records, "recent")
+    top_themes = _top_themes(records)
+    primary_theme = top_themes[0][0]
+    secondary_theme = top_themes[1][0] if len(top_themes) > 1 else "相关产业链"
+    evidence = _evidence_lines(records)
+
+    changes: list[str] = []
+    for theme, count in top_themes:
+        latest_count = latest_counts.get(theme, 0)
+        recent_count = recent_counts.get(theme, 0)
+        if latest_count and recent_count:
+            label = "强化"
+        elif latest_count:
+            label = "新出现/待确认"
+        elif recent_count:
+            label = "延续但本次新增不足"
+        else:
+            label = "待确认"
+        changes.append(f"- {label}：{theme} 出现 {count} 条相关信号；需要用成交量、产业新闻和公司公告继续验证。")
+
+    change_text = "\n".join(changes[:4])
+    evidence_text = "\n".join(evidence)
+    escaped_error = error.replace("\n", " ")[:220]
+
+    return f"""> ⚠️ LLM 调用失败，以下为规则引擎生成的动量简报；失败原因：{escaped_error}
+
+## 市场动量总览
+- 当前最集中的线索是 **{primary_theme}**，信号来自最新抓取与最近上下文的交叉出现，适合作为国内资本市场的优先观察方向，证据强度 B/C。
+- 第二层线索是 **{secondary_theme}**，更适合等待价格、订单、政策或产业事件确认后再提高权重，证据强度 C。
+- 若新增信息较少，本报告优先使用最近几天的上下文判断动量延续性，避免因为单日空窗误判趋势消失。
+
+## 动量变化
+{change_text}
+
+## 风险雷达
+- 模型链路异常会降低文本理解深度，本版只做关键词和来源强度聚合，不能替代完整投研判断。
+- 若热门主题只停留在观点层、缺少订单/价格/业绩验证，容易形成情绪交易后的回撤。
+- 对国内映射要重点防范“海外叙事强、A股兑现弱”的错配，尤其是拥挤赛道和短期涨幅过高标的。
+
+## 交易策略
+| 策略主题 | 国内映射 | 仓位态度 | 触发条件 | 风控信号 |
+|---|---|---|---|---|
+| {primary_theme} | 产业链龙头、ETF、核心供应商 | 观察/小仓试探 | 多来源继续强化且价格放量 | 证据减少或高位放量回落 |
+| {secondary_theme} | 相关港股/A股映射 | 等确认 | 出现订单、价格、财报或政策催化 | 主题热度下降且无基本面跟进 |
+
+## 证据链摘录
+{evidence_text}
+
+## 明日验证
+| 要验证什么 | 为什么重要 | 观察指标/来源 |
+|---|---|---|
+| 主题是否继续跨来源出现 | 判断动量是否延续 | X/Nitter、微信公众号、微信群归档 |
+| 国内映射是否有资金响应 | 判断能否转化为交易机会 | A股/港股成交额、强弱排序、板块涨跌 |
+| 是否出现反向证据 | 防止单边叙事误导 | 价格回撤、公司澄清、宏观或监管冲击 |
+
+---
+仅供研究，不构成投资建议。"""

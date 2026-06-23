@@ -40,6 +40,8 @@ SH = ZoneInfo("Asia/Shanghai")
 NEW_ACCOUNT_LOOKBACK_DAYS = 7
 NEW_ACCOUNT_FETCH_COUNT = 100
 TRACKED_FETCH_COUNT = 40
+LLM_CONTEXT_DAYS = 3
+LLM_CONTEXT_MAX_ITEMS = 160
 
 # Use package-style imports; main is launched via `python -m src.main`.
 if __package__ in (None, ""):
@@ -50,7 +52,7 @@ if __package__ in (None, ""):
     from src.sources.twitterapi_io import fetch_user_tweets as fetch_via_tio  # type: ignore
     from src.sources.wechat_groups import load_wechat_group_archives  # type: ignore
     from src.fetch_x_data import TwitterAPIError  # type: ignore
-    from src.summarize import LLMError, summarize  # type: ignore
+    from src.summarize import LLMError, fallback_summary, summarize  # type: ignore
 else:
     from .state import load_state, save_state, update_handle
     from .sources.nitter import NitterError, fetch_user_rss
@@ -58,7 +60,7 @@ else:
     from .sources.twitterapi_io import fetch_user_tweets as fetch_via_tio
     from .sources.wechat_groups import load_wechat_group_archives
     from .fetch_x_data import TwitterAPIError
-    from .summarize import LLMError, summarize
+    from .summarize import LLMError, fallback_summary, summarize
 
 
 def _load_kol_accounts() -> list[dict[str, str]]:
@@ -415,12 +417,85 @@ def _force_lookback_days() -> int:
     return max(0, min(value, 30))
 
 
+def _llm_context_days() -> int:
+    raw = (os.environ.get("LLM_CONTEXT_DAYS") or str(LLM_CONTEXT_DAYS)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return LLM_CONTEXT_DAYS
+    return max(0, min(value, 14))
+
+
+def _item_key(item: dict) -> str:
+    for key in ("url", "id"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return f"{key}:{value}"
+    return f"text:{(item.get('text') or '')[:120]}:{item.get('kol') or item.get('handle') or ''}"
+
+
+def _tag_context_items(items: list[dict], role: str, context_date: str) -> list[dict]:
+    tagged: list[dict] = []
+    for item in items:
+        enriched = dict(item)
+        enriched["contextRole"] = role
+        enriched["contextDate"] = context_date
+        tagged.append(enriched)
+    return tagged
+
+
+def _raw_context_date(path: Path) -> str:
+    stem = path.stem.replace("raw_", "")
+    try:
+        return dt.datetime.strptime(stem, "%Y%m%d_%H%M").strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return stem
+
+
+def _load_recent_llm_context(
+    current_raw_path: Path,
+    latest_items: list[dict],
+    now_sh: dt.datetime,
+) -> list[dict]:
+    days = _llm_context_days()
+    if days <= 0:
+        return []
+
+    cutoff = now_sh - dt.timedelta(days=days)
+    seen = {_item_key(item) for item in latest_items}
+    context: list[dict] = []
+    for path in sorted(DATA_DIR.glob("raw_*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        if path == current_raw_path:
+            continue
+        try:
+            file_time = dt.datetime.fromtimestamp(path.stat().st_mtime, SH)
+        except OSError:
+            continue
+        if file_time < cutoff:
+            continue
+        try:
+            results = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        items = _tag_context_items(_flatten_new_tweets(results), "recent", _raw_context_date(path))
+        for item in items:
+            key = _item_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            context.append(item)
+            if len(context) >= LLM_CONTEXT_MAX_ITEMS:
+                return context
+    return context
+
+
 def _render_summary_markdown(
     now_sh: dt.datetime,
     summary_md: str,
     results: list[dict],
     source_counts: dict[str, int],
     total_new: int,
+    context_count: int,
 ) -> str:
     source_summary = " / ".join(f"{key}:{value}" for key, value in sorted(source_counts.items())) or "none"
     lines = [
@@ -430,6 +505,7 @@ def _render_summary_markdown(
         "窗口：过去 24 小时（新账号回溯 7 天）",
         f"数据源：{source_summary}",
         f"新增内容：{total_new} 条",
+        f"滚动上下文：最近 {_llm_context_days()} 天，{context_count} 条",
         f"模型：{(os.environ.get('ARK_MODEL') or 'kimi-k2.6').strip()}",
         "",
         summary_md.strip(),
@@ -530,19 +606,23 @@ def main() -> int:
     source_counts = _source_counts(results)
     flat_new_tweets = _flatten_new_tweets(results)
     total_new = len(flat_new_tweets)
+    latest_items = _tag_context_items(flat_new_tweets, "latest", now_sh.strftime("%Y-%m-%d %H:%M"))
+    recent_context = _load_recent_llm_context(raw_path, latest_items, now_sh)
+    llm_items = latest_items + recent_context
     llm_failed = False
     llm_error = ""
     summary_md = ""
 
-    if flat_new_tweets:
+    if llm_items:
         try:
-            summary_md = summarize(flat_new_tweets)
+            summary_md = summarize(llm_items)
         except LLMError as exc:
             llm_failed = True
             llm_error = str(exc)
+            summary_md = fallback_summary(llm_items, llm_error)
 
     if summary_md:
-        md = _render_summary_markdown(now_sh, summary_md, results, source_counts, total_new)
+        md = _render_summary_markdown(now_sh, summary_md, results, source_counts, total_new, len(recent_context))
     elif total_new == 0:
         md = "\n".join(
             [
@@ -551,8 +631,9 @@ def main() -> int:
                 f"生成时间：{now_sh.strftime('%Y-%m-%d %H:%M')} Asia/Shanghai",
                 "窗口：过去 24 小时（新账号回溯 7 天）",
                 f"数据源：{' / '.join(f'{k}:{v}' for k, v in sorted(source_counts.items())) or 'none'}",
+                f"滚动上下文：最近 {_llm_context_days()} 天，0 条",
                 "",
-                "今日所有追踪 KOL / 文章源 / 微信投资群均无新增内容，跳过 LLM 总结。",
+                "今日所有追踪 KOL / 文章源 / 微信投资群均无新增内容，且最近上下文为空，跳过 LLM 总结。",
                 "",
             ]
         )

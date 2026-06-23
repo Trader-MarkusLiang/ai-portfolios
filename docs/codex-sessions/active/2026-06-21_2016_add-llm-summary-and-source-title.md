@@ -145,3 +145,11 @@ Continue the existing investment brief project, correcting the product positioni
 - Manually verified `NO_GIT=1 scripts/run_automation_job.sh wechat_articles` succeeds and writes a row to `docs/automation-runs.md`; reverted the manual test row afterward so the ledger remains reserved for real scheduled runs.
 - Updated both Codex automations from model `gpt-5.4-mini` to the configured local default `gpt-5.4`, because the machine's active provider config is `local-qwen-rapid` with default model `gpt-5.4` and the automation sessions appeared to stall before execution.
 - Archived the two failed automation threads to keep the sidebar clean.
+
+- Investigated the LLM analysis chain on 2026-06-24: a direct Ark/Kimi call using the latest raw data could hang without a client timeout, and the main report only called LLM when the current run had new items.
+- Updated `src/main.py` so reports pass both latest items and a deduplicated rolling recent context window into the LLM. If the day has `0 新` but recent raw files exist, the report can still produce market momentum, risk, and strategy analysis.
+- Updated `src/summarize.py` to use the new report structure: `市场动量总览`, `动量变化`, `风险雷达`, `交易策略`, `证据链摘录`, and `明日验证`.
+- Added Ark client timeout via `ARK_TIMEOUT_SECONDS` defaulting to 75 seconds, smaller first/retry payloads, retry-on-network-timeout behavior, and report normalization for model outputs that are structurally complete but missing the disclaimer.
+- Added deterministic `fallback_summary()` so a failed LLM call still produces a usable rule-based market momentum/risk/strategy brief instead of falling back to raw-only text.
+- Added evidence-link post-processing so model outputs that summarize evidence without URLs are replaced with selected source excerpts containing links/local archive references.
+- Verified with `python3 -m py_compile src/main.py src/summarize.py`, rule-based fallback checks, PDF rendering from generated Markdown, and a real Ark/Kimi call that returned an 868-character analysis report after the prompt/payload changes.
