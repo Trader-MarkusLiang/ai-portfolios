@@ -125,3 +125,10 @@ Continue the existing investment brief project, correcting the product positioni
 
 - Local WeWe RSS URLs are configured and Codex automation syncs articles multiple times per day.
 - Mac WeChat group UI capture automation is configured, but first live run requires macOS Accessibility permission for Terminal/Codex/osascript if not already granted.
+
+- Investigated the 2026-06-23 afternoon Discord PDF: PDF delivery worked, but the report fell back to raw mode because Ark/Kimi returned empty or incomplete LLM content.
+- Reworked `src/summarize.py` for stable production summaries: short embedded investment prompt, compact per-source packing, priority scoring for WeChat archives/articles/AI hardware keywords, and retry with a smaller payload.
+- Added WeChat group archive excerpting so noisy service-guide text is dropped and investment messages such as Apple AI -> DRAM/HBM demand and `03121加cang至7%` reach the main LLM synthesis.
+- Added report completeness validation requiring all expected Markdown sections and the investment-disclaimer footer; incomplete or empty model output now retries instead of silently becoming a broken investment brief.
+- Verified locally with `.venv` and Ark/Kimi using historical raw data and `FORCE_LOOKBACK_DAYS=1 .venv/bin/python -m src.main`; generated an analysis-mode report containing `一页结论`, `今日最大公约数`, `机会线索矩阵`, `分歧与风险`, `证据链摘录`, and `明日行动清单`.
+- Verified PDF rendering path locally with `.venv/bin/python scripts/render_report_pdf.py`; local Playwright browser is not installed so fallback PDF rendered, while GitHub Actions installs Chromium and should use the HTML/Chromium path.
