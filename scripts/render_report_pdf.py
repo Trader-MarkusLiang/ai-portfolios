@@ -264,7 +264,15 @@ def markdown_to_html(markdown: str) -> str:
             close_list()
             title = _clean_inline(line[2:])
             body.append(f'<section class="cover"><h1>{title}</h1><div class="meta">')
-        elif line.startswith("生成时间：") or line.startswith("窗口：") or line.startswith("数据源：") or line.startswith("新增推文：") or line.startswith("模型："):
+        elif (
+            line.startswith("生成时间：")
+            or line.startswith("窗口：")
+            or line.startswith("数据源：")
+            or line.startswith("新增推文：")
+            or line.startswith("新增内容：")
+            or line.startswith("滚动上下文：")
+            or line.startswith("模型：")
+        ):
             body.append(f'<span class="pill">{_clean_inline(line)}</span>')
         elif line.startswith("## "):
             close_list()

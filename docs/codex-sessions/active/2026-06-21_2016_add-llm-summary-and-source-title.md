@@ -153,3 +153,13 @@ Continue the existing investment brief project, correcting the product positioni
 - Added deterministic `fallback_summary()` so a failed LLM call still produces a usable rule-based market momentum/risk/strategy brief instead of falling back to raw-only text.
 - Added evidence-link post-processing so model outputs that summarize evidence without URLs are replaced with selected source excerpts containing links/local archive references.
 - Verified with `python3 -m py_compile src/main.py src/summarize.py`, rule-based fallback checks, PDF rendering from generated Markdown, and a real Ark/Kimi call that returned an 868-character analysis report after the prompt/payload changes.
+
+- Productized the final PDF report format on 2026-06-24 after user requested a report suitable for both professional and ordinary investors.
+- Added `docs/report-product-spec.md` to freeze the product positioning, fixed report directory, analysis chain, LLM context-control rules, structured intermediate layer, and future chart/scoring upgrades.
+- Reworked `src/summarize.py` so the LLM now outputs compact structured JSON instead of free-form Markdown. The code renders that JSON into a fixed report template: one-page decision dashboard, key calls, momentum map, logic chains, opportunity matrix, risk radar, evidence excerpts, and tomorrow checklist.
+- Added compatibility for shortened model JSON keys and imperfect model schemas, because Ark/Kimi sometimes returns simplified keys even when prompted with a full schema.
+- Reduced LLM input payload and disabled SDK retries with `max_retries=0`; default `ARK_TIMEOUT_SECONDS` is now 45 seconds so GitHub Actions does not stall on slow model responses.
+- Kept a same-template rule-based fallback so even when LLM times out or returns truncated JSON, the PDF still has the productized directory and a usable market momentum/risk/strategy skeleton.
+- Updated `scripts/render_report_pdf.py` so new report metadata fields (`新增内容`, `滚动上下文`) render as cover pills in HTML/PDF.
+- Updated `.github/workflows/market-brief.yml` to pass `ARK_TIMEOUT_SECONDS`, and updated `README.md` with the productized PDF flow and context-length strategy.
+- Verified with Python compilation, short-schema rendering checks, full local `python -m src.main`, and PDF rendering to `/tmp/product_report_final.pdf`. Local Playwright browser is still missing, so local render used ReportLab fallback; GitHub Actions installs Chromium and should use the HTML/CSS path.
