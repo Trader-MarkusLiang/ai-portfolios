@@ -101,7 +101,8 @@ Continue the existing investment brief project, correcting the product positioni
 
 ## Decisions
 
-- Use `kimi-k2.6` on `https://ark.cn-beijing.volces.com/api/coding/v3`.
+- Use the Ark coding endpoint `https://ark.cn-beijing.volces.com/api/coding/v3`.
+- Use a two-stage LLM pipeline: `kimi-k2.7-code`/compatible deeper models for planning, faster models such as `minimax-m3` for final writing.
 - Keep graceful degradation: if LLM fails, still send the raw tweet report.
 - Include source hit counts in the Discord title for quick diagnostics.
 
@@ -118,7 +119,7 @@ Continue the existing investment brief project, correcting the product positioni
 ## Resume instructions
 
 - Read `src/main.py`, `src/sources/wechat_groups.py`, `scripts/run_wechat_group_sync.sh`, `src/summarize.py`, `.github/workflows/market-brief.yml`, and `README.md`.
-- Ensure GitHub Secrets include `ARK_API_KEY`, `ARK_BASE_URL`, `ARK_MODEL`, and `DISCORD_WEBHOOK_URL`.
+- Ensure GitHub Secrets include `ARK_API_KEY`, `ARK_BASE_URL`, `ARK_PLANNER_MODEL`, `ARK_WRITER_MODEL`, and `DISCORD_WEBHOOK_URL`.
 - Manually trigger `全球投资动能监控` in GitHub Actions and inspect Discord output.
 
 ## Open questions
@@ -163,3 +164,10 @@ Continue the existing investment brief project, correcting the product positioni
 - Updated `scripts/render_report_pdf.py` so new report metadata fields (`新增内容`, `滚动上下文`) render as cover pills in HTML/PDF.
 - Updated `.github/workflows/market-brief.yml` to pass `ARK_TIMEOUT_SECONDS`, and updated `README.md` with the productized PDF flow and context-length strategy.
 - Verified with Python compilation, short-schema rendering checks, full local `python -m src.main`, and PDF rendering to `/tmp/product_report_final.pdf`. Local Playwright browser is still missing, so local render used ReportLab fallback; GitHub Actions installs Chromium and should use the HTML/CSS path.
+
+- Split the Ark LLM chain into two layers on 2026-06-26: Planner model builds the report outline/core points, Writer model turns the outline into final report JSON.
+- Set defaults to `ARK_PLANNER_MODEL=kimi-k2.7-code` and `ARK_WRITER_MODEL=minimax-m3`, with Planner fallback `minimax-m3` and Writer fallbacks `doubao-seed-2.0-lite,deepseek-v4-flash`.
+- Added role-specific timeouts: `ARK_PLANNER_TIMEOUT_SECONDS=20` and `ARK_WRITER_TIMEOUT_SECONDS=45`.
+- Disabled JSON mode by default for `minimax-m3` and `deepseek-v4-flash`, because Ark tests showed these models either perform better without JSON mode or do not support `response_format`.
+- Added schema validation for candidate model output: valid JSON without the required report fields no longer counts as success.
+- Updated `.github/workflows/market-brief.yml`, `.env.example`, `README.md`, and `docs/report-product-spec.md` to document the two-stage Planner/Writer pipeline.

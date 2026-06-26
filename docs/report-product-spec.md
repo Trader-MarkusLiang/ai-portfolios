@@ -41,6 +41,15 @@ LLM 不直接读取全部原文。代码先做信息压缩：
 - 首轮请求使用较小 JSON 包；失败或超时后用更小包重试。
 - 如果 LLM 仍失败，规则引擎生成同目录的兜底报告，保证 PDF 不空转。
 
+## 两阶段 LLM 分工
+
+LLM 被拆成两层，避免慢模型长时间承担成文任务：
+
+1. Planner：默认 `kimi-k2.7-code`，只输出目录、核心判断、动量方向、证据强度和逻辑骨架。
+2. Writer：默认 `minimax-m3`，只基于 Planner JSON 成文，不新增未经提纲支持的主题。
+3. Fallback：Planner 默认回退 `minimax-m3`；Writer 默认回退 `doubao-seed-2.0-lite,deepseek-v4-flash`。
+4. Schema gate：模型即使返回合法 JSON，也必须包含完整报告字段，否则视为失败并切换候选模型或规则兜底。
+
 ## 结构化中间层
 
 LLM 输出 JSON，不直接输出最终 Markdown。代码负责把 JSON 渲染成固定报告模板，避免每天版式漂移。

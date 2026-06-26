@@ -45,8 +45,13 @@ jobs:
           TWITTERAPI_IO_KEY: ${{ secrets.TWITTERAPI_IO_KEY }}
           ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
           ARK_BASE_URL: ${{ secrets.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/coding/v3' }}
-          ARK_MODEL: ${{ secrets.ARK_MODEL || 'kimi-k2.6' }}
+          ARK_PLANNER_MODEL: ${{ secrets.ARK_PLANNER_MODEL || 'kimi-k2.7-code' }}
+          ARK_WRITER_MODEL: ${{ secrets.ARK_WRITER_MODEL || 'minimax-m3' }}
+          ARK_PLANNER_FALLBACK_MODELS: ${{ secrets.ARK_PLANNER_FALLBACK_MODELS || 'minimax-m3' }}
+          ARK_WRITER_FALLBACK_MODELS: ${{ secrets.ARK_WRITER_FALLBACK_MODELS || 'doubao-seed-2.0-lite,deepseek-v4-flash' }}
           ARK_TIMEOUT_SECONDS: ${{ secrets.ARK_TIMEOUT_SECONDS || '45' }}
+          ARK_PLANNER_TIMEOUT_SECONDS: ${{ secrets.ARK_PLANNER_TIMEOUT_SECONDS || '20' }}
+          ARK_WRITER_TIMEOUT_SECONDS: ${{ secrets.ARK_WRITER_TIMEOUT_SECONDS || '45' }}
           FORCE_LOOKBACK_DAYS: ${{ github.event.inputs.force_lookback_days || '0' }}
         run: |
           python -m src.main

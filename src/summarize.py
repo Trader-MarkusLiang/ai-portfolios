@@ -6,8 +6,13 @@ to turn normalized monitor items into a Chinese investment-research brief.
 Env vars:
   ARK_API_KEY     required
   ARK_BASE_URL    default https://ark.cn-beijing.volces.com/api/coding/v3
-  ARK_MODEL       default kimi-k2.6
-  ARK_TIMEOUT_SECONDS default 75
+  ARK_PLANNER_MODEL default kimi-k2.7-code
+  ARK_WRITER_MODEL  default minimax-m3
+  ARK_PLANNER_FALLBACK_MODELS default minimax-m3
+  ARK_WRITER_FALLBACK_MODELS  default doubao-seed-2.0-lite,deepseek-v4-flash
+  ARK_TIMEOUT_SECONDS default 45
+  ARK_PLANNER_TIMEOUT_SECONDS default 20
+  ARK_WRITER_TIMEOUT_SECONDS default 45
 """
 
 from __future__ import annotations
@@ -30,16 +35,21 @@ except ImportError:  # pragma: no cover
     OpenAI = None  # type: ignore[assignment]
 
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
-DEFAULT_MODEL = "kimi-k2.6"
+DEFAULT_PLANNER_MODEL = "kimi-k2.7-code"
+DEFAULT_WRITER_MODEL = "minimax-m3"
+DEFAULT_PLANNER_FALLBACK_MODELS = ("minimax-m3",)
+DEFAULT_WRITER_FALLBACK_MODELS = ("doubao-seed-2.0-lite", "deepseek-v4-flash")
 DEFAULT_TIMEOUT_SECONDS = 45.0
+DEFAULT_PLANNER_TIMEOUT_SECONDS = 20.0
+DEFAULT_WRITER_TIMEOUT_SECONDS = 45.0
 
-MAX_ITEMS = 10
-MAX_RETRY_ITEMS = 6
-MAX_TEXT_LEN = 140
+MAX_ITEMS = 6
+MAX_RETRY_ITEMS = 4
+MAX_TEXT_LEN = 100
 MAX_ARCHIVE_TEXT_LEN = 900
-MAX_RETRY_TEXT_LEN = 100
-MAX_PAYLOAD_CHARS = 2600
-MAX_RETRY_PAYLOAD_CHARS = 1600
+MAX_RETRY_TEXT_LEN = 80
+MAX_PAYLOAD_CHARS = 1400
+MAX_RETRY_PAYLOAD_CHARS = 900
 MAX_OUTPUT_TOKENS = 4096
 REQUIRED_SECTIONS = (
     "## 一页决策看板",
@@ -52,9 +62,9 @@ REQUIRED_SECTIONS = (
     "## 明日验证清单",
 )
 
-SYSTEM_PROMPT = "你是中文买方投研助手。只输出可解析 JSON，不输出思考过程，不输出 Markdown。"
+SYSTEM_PROMPT = "你是中文买方投研助手。严格遵守用户要求的输出格式，不输出思考过程。"
 
-USER_TEMPLATE = """基于 JSON 输出极简投资判断 JSON。latest 是本次新增，recent 是近几天上下文。只做跨来源整合，不复述流水账。短句，禁止 Markdown，禁止解释。
+PLANNER_TEMPLATE = """基于 JSON 输出极简投资报告提纲 JSON。latest 是本次新增，recent 是近几天上下文。你只负责定目录、核心判断和逻辑骨架，不负责成文。短句，禁止 Markdown，禁止解释。
 
 输出 schema，key 必须使用英文短 key：
 {"one":{"temp":"偏热/中性/偏冷/风险升温","risk":"低/中/高","conclusion":"一句话","note":"给普通投资者一句话"},
@@ -66,18 +76,19 @@ USER_TEMPLATE = """基于 JSON 输出极简投资判断 JSON。latest 是本次�
 "ev":[{"s":"A/B/C/D","src":"来源","sum":"证据摘要","url":"URL或本地归档"}],
 "next":[{"it":"验证事项","why":"重要性","src":"观察指标/来源"}]}
 
-数量：calls 2-3；mom 3；logic 2；opp 3；risk 2；ev 4；next 3。
+数量：calls 2-3；mom 2-3；logic 1-2；opp 2-3；risk 2；ev 3-4；next 3。
 
 JSON:
 {{items}}
 """
 
-RETRY_TEMPLATE = """基于 JSON 输出极简投资判断 JSON，只用英文短 key，不要 Markdown。
-schema: {"one":{"temp":"","risk":"","conclusion":"","note":""},"calls":[{"t":"","d":"","e":"","map":"","act":""}],"mom":[{"t":"","chg":"","drv":"","watch":""}],"logic":[{"sig":"","mech":"","map":"","con":""}],"opp":[{"t":"","ben":"","e":"","crowd":"","strat":"","bad":""}],"risk":[{"r":"","trig":"","imp":"","resp":""}],"ev":[{"s":"","src":"","sum":"","url":""}],"next":[{"it":"","why":"","src":""}]}
-数量：calls 2；mom 2；logic 1；opp 2；risk 2；ev 3；next 3。
+WRITER_TEMPLATE = """把下面的报告提纲 JSON 改写成完整、清晰、专业但普通投资者也能读懂的中文投资报告 JSON。你只负责表达和补充逻辑连贯性，不新增未经提纲支持的主题。禁止 Markdown，禁止解释。
+
+输出同一 schema，字段必须完整，短句但信息密度高：
+{"one":{"temp":"","risk":"","conclusion":"","note":""},"calls":[{"t":"","d":"","e":"","map":"","act":""}],"mom":[{"t":"","chg":"","drv":"","watch":""}],"logic":[{"sig":"","mech":"","map":"","con":""}],"opp":[{"t":"","ben":"","e":"","crowd":"","strat":"","bad":""}],"risk":[{"r":"","trig":"","imp":"","resp":""}],"ev":[{"s":"","src":"","sum":"","url":""}],"next":[{"it":"","why":"","src":""}]}
 
 JSON:
-{{items}}
+{{outline}}
 """
 
 
@@ -215,6 +226,33 @@ def _response_id(resp: Any) -> str:
     return str(getattr(resp, "id", "") or "")
 
 
+def _csv_models(value: str) -> list[str]:
+    models: list[str] = []
+    for model in value.split(","):
+        model = model.strip()
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
+def _model_candidates(role: str) -> list[str]:
+    if role == "planner":
+        primary = (os.environ.get("ARK_PLANNER_MODEL") or os.environ.get("ARK_MODEL") or DEFAULT_PLANNER_MODEL).strip()
+        fallback = os.environ.get("ARK_PLANNER_FALLBACK_MODELS") or ",".join(DEFAULT_PLANNER_FALLBACK_MODELS)
+    else:
+        primary = (os.environ.get("ARK_WRITER_MODEL") or DEFAULT_WRITER_MODEL).strip()
+        fallback = os.environ.get("ARK_WRITER_FALLBACK_MODELS") or ",".join(DEFAULT_WRITER_FALLBACK_MODELS)
+    models: list[str] = []
+    for model in [primary, *_csv_models(fallback)]:
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
+def _client(api_key: str, base_url: str, role: str) -> Any:
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout_seconds(role), max_retries=0)
+
+
 def _create_completion(client: Any, request: dict[str, Any]) -> Any:
     try:
         return client.chat.completions.create(**request)
@@ -227,22 +265,46 @@ def _create_completion(client: Any, request: dict[str, Any]) -> Any:
         return client.chat.completions.create(**fallback)
 
 
-def _call_model(client: Any, model: str, user_template: str, packed: list[dict[str, Any]]) -> tuple[str, Any]:
-    payload = json.dumps(packed, ensure_ascii=False, separators=(",", ":"))
-    user_prompt = user_template.replace("{{items}}", payload)
+def _supports_json_mode(model: str) -> bool:
+    disabled = _csv_models(os.environ.get("LLM_JSON_MODE_DISABLED_MODELS") or "deepseek-v4-flash,minimax-m3")
+    if model in disabled:
+        return False
+    return (os.environ.get("LLM_JSON_MODE") or "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _call_model(client: Any, model: str, user_prompt: str, *, max_tokens: int = MAX_OUTPUT_TOKENS) -> tuple[str, Any]:
     request = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        "max_tokens": MAX_OUTPUT_TOKENS,
+        "max_tokens": max_tokens,
         "temperature": 0.2,
     }
-    if (os.environ.get("LLM_JSON_MODE") or "1").strip().lower() not in {"0", "false", "no", "off"}:
+    if _supports_json_mode(model):
         request["response_format"] = {"type": "json_object"}
     resp = _create_completion(client, request)
     return (resp.choices[0].message.content or "").strip(), resp
+
+
+def _call_json_candidates(api_key: str, base_url: str, role: str, prompt: str, *, max_tokens: int) -> tuple[dict[str, Any], str]:
+    errors: list[str] = []
+    for model in _model_candidates(role):
+        try:
+            content, resp = _call_model(_client(api_key, base_url, role), model, prompt, max_tokens=max_tokens)
+        except Exception as exc:
+            errors.append(f"{role}:{model}: {type(exc).__name__}: {exc}")
+            continue
+        data = _json_from_model(content)
+        if data and _valid_report_data(_coerce_report_data(data)):
+            return data, model
+        finish = _finish_reason(resp)
+        errors.append(
+            f"{role}:{model}: invalid_json finish={finish}; response_id={_response_id(resp)}; "
+            f"chars={len(content)}"
+        )
+    raise LLMError("all " + role + " candidates failed: " + " | ".join(errors))
 
 
 def _safe_text(value: Any, default: str = "待确认") -> str:
@@ -598,14 +660,23 @@ def _normalize_model_report(content: str) -> str:
     return _normalize_report(content)
 
 
-def _timeout_seconds() -> float:
-    raw = (os.environ.get("ARK_TIMEOUT_SECONDS") or "").strip()
-    if not raw:
-        return DEFAULT_TIMEOUT_SECONDS
+def _parse_timeout(raw: str, default: float) -> float:
+    if not raw.strip():
+        return default
     try:
-        return max(10.0, min(float(raw), 180.0))
+        return max(5.0, min(float(raw), 180.0))
     except ValueError:
-        return DEFAULT_TIMEOUT_SECONDS
+        return default
+
+
+def _timeout_seconds(role: str | None = None) -> float:
+    if role == "planner":
+        raw = os.environ.get("ARK_PLANNER_TIMEOUT_SECONDS") or os.environ.get("ARK_TIMEOUT_SECONDS") or ""
+        return _parse_timeout(raw, DEFAULT_PLANNER_TIMEOUT_SECONDS)
+    if role == "writer":
+        raw = os.environ.get("ARK_WRITER_TIMEOUT_SECONDS") or os.environ.get("ARK_TIMEOUT_SECONDS") or ""
+        return _parse_timeout(raw, DEFAULT_WRITER_TIMEOUT_SECONDS)
+    return _parse_timeout(os.environ.get("ARK_TIMEOUT_SECONDS") or "", DEFAULT_TIMEOUT_SECONDS)
 
 
 def _has_required_sections(content: str) -> bool:
@@ -653,8 +724,6 @@ def summarize(items: list[dict[str, Any]]) -> str:
         raise LLMError("ARK_API_KEY is not set")
 
     base_url = (os.environ.get("ARK_BASE_URL") or DEFAULT_BASE_URL).strip()
-    model = (os.environ.get("ARK_MODEL") or DEFAULT_MODEL).strip()
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout_seconds(), max_retries=0)
 
     packed = _pack(
         items,
@@ -662,53 +731,49 @@ def summarize(items: list[dict[str, Any]]) -> str:
         max_text_len=MAX_TEXT_LEN,
         max_payload_chars=MAX_PAYLOAD_CHARS,
     )
-    retry_packed = _pack(
-        items,
-        max_items=MAX_RETRY_ITEMS,
-        max_text_len=MAX_RETRY_TEXT_LEN,
-        max_payload_chars=MAX_RETRY_PAYLOAD_CHARS,
-    )
+    payload = json.dumps(packed, ensure_ascii=False, separators=(",", ":"))
+    planner_prompt = PLANNER_TEMPLATE.replace("{{items}}", payload)
+    planner_model = "rule-engine"
+    planner_error = ""
     try:
-        content, resp = _call_model(client, model, USER_TEMPLATE, packed)
-    except Exception as exc:  # network / auth / model errors
-        first_error = f"{type(exc).__name__}: {exc}"
-        try:
-            content, retry_resp = _call_model(client, model, RETRY_TEMPLATE, retry_packed)
-        except Exception as retry_exc:
-            raise LLMError(
-                f"{first_error}; retry_error={type(retry_exc).__name__}: {retry_exc}; "
-                f"packed_items={len(packed)}; retry_items={len(retry_packed)}"
-            ) from retry_exc
-        normalized = _normalize_model_report(content)
-        if normalized:
-            return _ensure_evidence_links(normalized, retry_packed)
-        detail = "empty response from model" if not content else "incomplete response from model"
-        raise LLMError(
-            f"{first_error}; retry_{detail}; retry_finish={_finish_reason(retry_resp)}; "
-            f"retry_response_id={_response_id(retry_resp)}; packed_items={len(packed)}; "
-            f"retry_items={len(retry_packed)}"
+        outline_data, planner_model = _call_json_candidates(
+            api_key,
+            base_url,
+            "planner",
+            planner_prompt,
+            max_tokens=900,
         )
+    except LLMError as exc:
+        planner_error = str(exc)
+        outline_data = _outline_from_records(packed, planner_error)
+    outline = _coerce_report_data(outline_data)
+    outline_md = _render_report_data(outline)
 
-    normalized = _normalize_model_report(content)
-    if normalized:
-        return _ensure_evidence_links(normalized, packed)
-
-    try:
-        content, retry_resp = _call_model(client, model, RETRY_TEMPLATE, retry_packed)
-    except Exception as exc:
-        raise LLMError(
-            f"empty response from model; first_finish={_finish_reason(resp)}; "
-            f"first_response_id={_response_id(resp)}; retry_error={type(exc).__name__}: {exc}"
-        ) from exc
-    normalized = _normalize_model_report(content)
-    if normalized:
-        return _ensure_evidence_links(normalized, retry_packed)
-    detail = "empty response from model" if not content else "incomplete response from model"
-    raise LLMError(
-        f"{detail}; first_finish={_finish_reason(resp)}; retry_finish={_finish_reason(retry_resp)}; "
-        f"first_response_id={_response_id(resp)}; retry_response_id={_response_id(retry_resp)}; "
-        f"packed_items={len(packed)}; retry_items={len(retry_packed)}"
+    writer_prompt = WRITER_TEMPLATE.replace(
+        "{{outline}}",
+        json.dumps(outline, ensure_ascii=False, separators=(",", ":")),
     )
+    try:
+        report_data, writer_model = _call_json_candidates(
+            api_key,
+            base_url,
+            "writer",
+            writer_prompt,
+            max_tokens=1800,
+        )
+        report = _render_report_data(_coerce_report_data(report_data))
+        return _ensure_evidence_links(report, packed)
+    except LLMError as exc:
+        note = (
+            f"> ⚠️ Writer 模型调用失败，已使用 Planner 提纲直接生成报告；"
+            f"planner={planner_model}；失败原因：{str(exc)[:180]}"
+        )
+        if planner_error:
+            note = (
+                f"> ⚠️ Planner 与 Writer 均未成功，已使用规则提纲生成报告；"
+                f"planner_error={planner_error[:120]}；writer_error={str(exc)[:120]}"
+            )
+        return note + "\n\n" + _ensure_evidence_links(outline_md, packed)
 
 
 THEME_KEYWORDS = {
@@ -736,6 +801,58 @@ def _theme_counts(records: list[dict[str, Any]], role: str | None = None) -> dic
 def _top_themes(records: list[dict[str, Any]]) -> list[tuple[str, int]]:
     counts = _theme_counts(records)
     return sorted(counts.items(), key=lambda item: item[1], reverse=True)[:4] or [("暂无高一致性主题", 0)]
+
+
+def _outline_from_records(records: list[dict[str, Any]], error: str | None = None) -> dict[str, Any]:
+    top = _top_themes(records)
+    primary = top[0][0]
+    secondary = top[1][0] if len(top) > 1 else "相关产业链"
+    evidence_rows = []
+    for line in _evidence_lines(records, limit=4):
+        match = re.match(r"- \[([ABCD])\] ([^：]+)：(.+?)；链接：(.+)$", line)
+        if match:
+            evidence_rows.append(
+                {
+                    "s": match.group(1),
+                    "src": match.group(2),
+                    "sum": match.group(3),
+                    "url": match.group(4),
+                }
+            )
+    return {
+        "one": {
+            "temp": "中性偏热",
+            "risk": "中",
+            "conclusion": f"{primary} 是当前最集中的跨来源线索，{secondary} 是第二观察方向。",
+            "note": "先看证据是否连续强化，不因单条消息追高。",
+        },
+        "calls": [
+            {"t": primary, "d": "强化/待确认", "e": "B", "map": "A股/港股产业链龙头、ETF、核心供应商", "act": "观察"},
+            {"t": secondary, "d": "待确认", "e": "C", "map": "相关设备、材料、应用链", "act": "等待"},
+        ],
+        "mom": [
+            {"t": primary, "chg": "强化/待确认", "drv": "最新信息与滚动上下文共同出现", "watch": "是否继续跨来源出现并获得资金响应"},
+            {"t": secondary, "chg": "待确认", "drv": "主题热度进入观察区", "watch": "是否出现订单、价格或财报催化"},
+        ],
+        "logic": [
+            {"sig": f"{primary} 相关信息密集出现", "mech": "多来源共振提升主题可信度", "map": "国内产业链映射", "con": "可进入重点观察池"},
+            {"sig": f"{secondary} 相关信息延续", "mech": "需要基本面证据确认", "map": "相关设备、材料、应用链", "con": "等确认后再提高权重"},
+        ],
+        "opp": [
+            {"t": primary, "ben": "产业链龙头、ETF、核心供应商", "e": "B/C", "crowd": "中", "strat": "观察/小仓试探", "bad": "证据减少或高位放量回落"},
+            {"t": secondary, "ben": "相关港股/A股映射", "e": "C", "crowd": "中", "strat": "等确认", "bad": "主题热度下降且无基本面跟进"},
+        ],
+        "risk": [
+            {"r": "主题拥挤", "trig": "热点只停留在观点层且涨幅过大", "imp": "情绪交易后回撤", "resp": "等订单/价格/业绩验证"},
+            {"r": "映射错配", "trig": "海外叙事强但国内兑现弱", "imp": "A股/港股跟涨失败", "resp": "盯成交额、强弱排序和公司公告"},
+        ],
+        "ev": evidence_rows,
+        "next": [
+            {"it": "主题是否继续跨来源出现", "why": "判断动量是否延续", "src": "X/Nitter、微信公众号、微信群归档"},
+            {"it": "国内映射是否有资金响应", "why": "判断能否转化为交易机会", "src": "A股/港股成交额、强弱排序、板块涨跌"},
+            {"it": "是否出现反向证据", "why": "防止单边叙事误导", "src": "价格回撤、公司澄清、宏观或监管冲击"},
+        ],
+    }
 
 
 def _evidence_lines(records: list[dict[str, Any]], limit: int = 6) -> list[str]:

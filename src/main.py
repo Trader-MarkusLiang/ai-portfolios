@@ -498,6 +498,8 @@ def _render_summary_markdown(
     context_count: int,
 ) -> str:
     source_summary = " / ".join(f"{key}:{value}" for key, value in sorted(source_counts.items())) or "none"
+    planner_model = (os.environ.get("ARK_PLANNER_MODEL") or os.environ.get("ARK_MODEL") or "kimi-k2.7-code").strip()
+    writer_model = (os.environ.get("ARK_WRITER_MODEL") or "minimax-m3").strip()
     lines = [
         f"# {REPORT_TITLE}",
         "",
@@ -506,7 +508,7 @@ def _render_summary_markdown(
         f"数据源：{source_summary}",
         f"新增内容：{total_new} 条",
         f"滚动上下文：最近 {_llm_context_days()} 天，{context_count} 条",
-        f"模型：{(os.environ.get('ARK_MODEL') or 'kimi-k2.6').strip()}",
+        f"模型：Planner={planner_model} / Writer={writer_model}",
         "",
         summary_md.strip(),
         "",
